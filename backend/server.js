@@ -107,13 +107,13 @@ app.get('/api/spatial-test', async (req, res) => {
       cache.getOrFetch('buses', () => metlink.getBuses(), CACHE_TTL.BUSES_MS),
       cache.getOrFetch('stops', () => metlink.getStops(), CACHE_TTL.STOPS_MS)
     ]);
-    
+
     // Calculate performance comparison
     const totalStops = stops.length;
     const activeBuses = buses.filter(bus => bus.vehicle && bus.vehicle.position).length;
     const oldComplexity = activeBuses * totalStops; // O(buses × stops)
     const estimatedNewComplexity = activeBuses * Math.ceil(totalStops / (50 * 50)); // Rough estimate assuming even distribution
-    
+
     res.json({
       performance: {
         totalStops,
@@ -132,11 +132,11 @@ app.get('/api/spatial-test', async (req, res) => {
 
 // Environment detection
 const isDevelopment = process.env.NODE_ENV === 'development';
-const frontendPath = isDevelopment 
+const frontendPath = isDevelopment
   ? path.join(__dirname, '../frontend')  // Development: serve from source frontend
   : path.join(__dirname, 'public');      // Production: serve from public directory
 
-console.log(`🚀 Bus Synth Server`);
+console.log(`Bus Synth Server`);
 console.log(`Environment: ${isDevelopment ? 'development' : 'production'}`);
 console.log(`Frontend path: ${frontendPath}`);
 console.log(`HTTP port: ${PORT}`);
@@ -144,7 +144,7 @@ console.log(`WebSocket port: ${WS_PORT}`);
 
 // Verify frontend directory exists
 if (!fs.existsSync(frontendPath)) {
-  console.error(`❌ Frontend directory does not exist: ${frontendPath}`);
+  console.error(`Frontend directory does not exist: ${frontendPath}`);
   if (isDevelopment) {
     console.error(`For development, run: npm run dev`);
   } else {
@@ -222,7 +222,7 @@ const broadcastUpdates = async () => {
 // Handle WebSocket connections
 wss.on('connection', (ws) => {
   console.log('Client connected');
-  
+
   // Send historical data immediately for instant startup
   try {
     const historicalData = historicalCache.getHistoricalData();
@@ -233,19 +233,19 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify(entry));
         }
       });
-      
+
       console.log(`Sent ${historicalData.length} historical entries to new client`);
-      
+
       // Log cache stats for debugging
       const stats = historicalCache.getStats();
-      console.log(`Historical cache stats: ${stats.entryCount} entries, ${(stats.timeSpan/1000).toFixed(1)}s span, ${stats.totalBuses} total buses`);
+      console.log(`Historical cache stats: ${stats.entryCount} entries, ${(stats.timeSpan / 1000).toFixed(1)}s span, ${stats.totalBuses} total buses`);
     } else {
       console.log('No historical data available for new client');
     }
   } catch (error) {
     console.error('Error sending historical data:', error);
   }
-  
+
   ws.on('close', () => {
     console.log('Client disconnected');
   });
@@ -265,7 +265,7 @@ const initializeHistoricalCache = async () => {
   try {
     // Fetch initial data and populate cache immediately
     await broadcastUpdates();
-    
+
     // Wait a bit and fetch again to give some initial history
     setTimeout(async () => {
       await broadcastUpdates();
