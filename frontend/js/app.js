@@ -96,7 +96,7 @@ class BusSynthApp {
     try {
       // Fetch initial data
       this.updateStatus('Loading stops data...');
-      const stopsResponse = await fetch('/api/stops');
+      const stopsResponse = await fetch('api/stops');
       if (!stopsResponse.ok) throw new Error('Failed to fetch stops');
 
       this.stops = await stopsResponse.json();
