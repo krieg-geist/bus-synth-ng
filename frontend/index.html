@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Metlink Synth</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.2.7/Tone.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <h1>Metlink Synth</h1>
+                <div class="controls">
+                    <button id="audio-toggle-btn" class="btn-primary">Stop Audio</button>
+                    <div class="volume-control">
+                        <label for="volume-slider">Volume</label>
+                        <input type="range" id="volume-slider" min="0" max="100" value="70">
+                        <span id="volume-value">70%</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="status-bar">
+                <div class="status-item">
+                    <span class="label">Connection</span>
+                    <span id="connection-status" class="value">Connecting...</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Buses</span>
+                    <span id="bus-count" class="value">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Audio</span>
+                    <span id="audio-status" class="value">Starting...</span>
+                </div>
+            </div>
+        </header>
+        
+        <main>
+            <div id="map-container"></div>
+        </main>
+        
+        <footer>
+            <div class="synthesis-info">
+                <h3>Audio Synthesis</h3>
+                <p>Route pulse synthesis: Bus count → rhythm intensity | Position → pitch modulation | Delays → rhythm disruption | Noise → bus arrivals </p>
+            </div>
+            
+            <div class="audio-events-container">
+                <div class="audio-events-header">
+                    <h3>Live Events</h3>
+                    <div class="events-controls">
+                        <button id="toggle-events" class="btn-toggle">Hide</button>
+                        <button id="clear-events" class="btn-secondary">Clear</button>
+                    </div>
+                </div>
+                
+                <div id="audio-events-content" class="audio-events-content">
+                    <div class="events-tabs">
+                        <button class="tab-btn active" data-tab="routes">Routes</button>
+                        <button class="tab-btn" data-tab="arrivals">Arrivals</button>
+                        <button class="tab-btn" data-tab="delays">Delays</button>
+                    </div>
+                    
+                    <div class="tab-content">
+                        <div id="routes-tab" class="tab-panel active">
+                            <div class="tab-header">
+                                <h4>Active Routes</h4>
+                                <span class="event-count" id="routes-count">0</span>
+                            </div>
+                            <div id="active-routes" class="event-list">
+                                <div class="no-events">No routes playing</div>
+                            </div>
+                        </div>
+                        
+                        <div id="arrivals-tab" class="tab-panel">
+                            <div class="tab-header">
+                                <h4>Recent Arrivals</h4>
+                                <span class="event-count" id="arrivals-count">0</span>
+                            </div>
+                            <div id="recent-arrivals" class="event-list">
+                                <div class="no-events">No recent arrivals</div>
+                            </div>
+                        </div>
+                        
+                        <div id="delays-tab" class="tab-panel">
+                            <div class="tab-header">
+                                <h4>Delay Events</h4>
+                                <span class="event-count" id="delays-count">0</span>
+                            </div>
+                            <div id="delay-events" class="event-list">
+                                <div class="no-events">No delay events</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="js/websocket.js"></script>
+    <script src="js/spatial-index.js"></script>
+    <script src="js/route-pulse-audio.js"></script>
+    <script src="js/canvas-stops-layer.js"></script>
+    <script src="js/canvas-trails-layer.js"></script>
+    <script src="js/interpolated-map-manager.js"></script>
+    <script src="js/app.js"></script>
+    
+    <script>
+        // Tab functionality for audio events
+        document.addEventListener('DOMContentLoaded', function() {
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            const tabPanels = document.querySelectorAll('.tab-panel');
+            const toggleBtn = document.getElementById('toggle-events');
+            const eventsContent = document.getElementById('audio-events-content');
+            
+            // Tab switching
+            tabButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tabId = btn.dataset.tab;
+                    
+                    // Update active tab button
+                    tabButtons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    // Update active tab panel
+                    tabPanels.forEach(panel => {
+                        panel.classList.remove('active');
+                        if (panel.id === `${tabId}-tab`) {
+                            panel.classList.add('active');
+                        }
+                    });
+                });
+            });
+            
+            // Toggle events panel
+            toggleBtn.addEventListener('click', () => {
+                const isHidden = eventsContent.style.display === 'none';
+                eventsContent.style.display = isHidden ? 'block' : 'none';
+                toggleBtn.textContent = isHidden ? 'Hide' : 'Show';
+            });
+        });
+    </script>
+</body>
+</html>
