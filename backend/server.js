@@ -3,6 +3,7 @@ const express = require('express');
 const WebSocket = require('ws');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const MetlinkClient = require('./metlink-client');
 const Cache = require('./cache');
 const HistoricalDataCache = require('./historical-cache');
@@ -129,8 +130,31 @@ app.get('/api/spatial-test', async (req, res) => {
   }
 });
 
+// Environment detection
+const isDevelopment = process.env.NODE_ENV === 'development';
+const frontendPath = isDevelopment 
+  ? path.join(__dirname, '../frontend')  // Development: serve from source frontend
+  : path.join(__dirname, 'public');      // Production: serve from public directory
+
+console.log(`🚀 Bus Synth Server`);
+console.log(`Environment: ${isDevelopment ? 'development' : 'production'}`);
+console.log(`Frontend path: ${frontendPath}`);
+console.log(`HTTP port: ${PORT}`);
+console.log(`WebSocket port: ${WS_PORT}`);
+
+// Verify frontend directory exists
+if (!fs.existsSync(frontendPath)) {
+  console.error(`❌ Frontend directory does not exist: ${frontendPath}`);
+  if (isDevelopment) {
+    console.error(`For development, run: npm run dev`);
+  } else {
+    console.error(`For production, ensure frontend files are in: ${frontendPath}`);
+  }
+  process.exit(1);
+}
+
 // Serve frontend static files with proper MIME types
-app.use(express.static(path.join(__dirname, '../frontend'), {
+app.use(express.static(frontendPath, {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.css')) {
       res.setHeader('Content-Type', 'text/css');
@@ -142,7 +166,10 @@ app.use(express.static(path.join(__dirname, '../frontend'), {
 
 // Serve frontend
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+  const indexPath = isDevelopment
+    ? path.join(__dirname, '../frontend/index.html')  // Development
+    : path.join(__dirname, 'public/index.html');      // Production
+  res.sendFile(indexPath);
 });
 
 // Start HTTP server
