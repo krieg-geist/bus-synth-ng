@@ -3,7 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <base href="/projects/bus-synth/">
+    <!-- Base href is set by environment detection below -->
+    <script>
+        // Set base href dynamically based on environment - must be early in head
+        (function() {
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            if (!isLocalhost) {
+                // Only set base href for production, leave default for localhost
+                document.write('<base href="/projects/bus-synth/">');
+            }
+        })();
+    </script>
     <title>Metlink Synth</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.2.7/Tone.js"></script>
@@ -48,7 +58,7 @@
         <footer>
             <div class="synthesis-info">
                 <h3>Audio Synthesis</h3>
-                <p>Route pulse synthesis: Bus count → rhythm intensity | Position → pitch modulation | Delays → rhythm disruption | Noise → bus arrivals </p>
+                <p>Route topology synthesis: Bus count → logarithmic gain scaling | Route orientation → stereo panning | Route geographic spread → pitch modulation | Total city activity → master volume | Delays → rhythm disruption | Arrivals → noise blasts</p>
             </div>
             
             <div class="audio-events-container">

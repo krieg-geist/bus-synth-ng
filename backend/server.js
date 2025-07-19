@@ -46,9 +46,8 @@ if (!process.env.METLINK_API_KEY) {
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
-// API Routes
+// API Routes (before static files to avoid conflicts)
 app.get('/api/buses', async (req, res) => {
   try {
     const data = await cache.getOrFetch('buses', () => metlink.getBuses(), CACHE_TTL.BUSES_MS);
@@ -129,6 +128,17 @@ app.get('/api/spatial-test', async (req, res) => {
     res.status(500).json({ error: 'Failed to run spatial test' });
   }
 });
+
+// Serve frontend static files with proper MIME types
+app.use(express.static(path.join(__dirname, '../frontend'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css');
+    } else if (filePath.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript');
+    }
+  }
+}));
 
 // Serve frontend
 app.get('/', (req, res) => {
