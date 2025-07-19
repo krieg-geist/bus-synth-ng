@@ -10,7 +10,8 @@ class WebSocketClient {
   }
 
   connect() {
-    const wsUrl = `ws://${window.location.hostname}:8765`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/projects/bus-synth/ws`;
     
     try {
       this.ws = new WebSocket(wsUrl);

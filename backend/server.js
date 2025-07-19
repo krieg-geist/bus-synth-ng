@@ -46,7 +46,7 @@ if (!process.env.METLINK_API_KEY) {
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // API Routes
 app.get('/api/buses', async (req, res) => {
