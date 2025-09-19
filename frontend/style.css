@@ -4,10 +4,24 @@
     box-sizing: border-box;
 }
 
+:root {
+    --color-accent: #00bcd4;
+    --color-accent-dark: #00acc1;
+    --color-bg-primary: #1a1a1a;
+    --color-bg-secondary: #2d2d2d;
+    --color-bg-tertiary: #333;
+    --color-text-primary: #fff;
+    --color-text-secondary: #ccc;
+    --color-border: #444;
+    --color-success: #4caf50;
+    --color-warning: #ff9800;
+    --color-error: #f44336;
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: #1a1a1a;
-    color: #ffffff;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
     line-height: 1.6;
 }
 
@@ -34,7 +48,7 @@ header {
 }
 
 h1 {
-    color: #00bcd4;
+    color: var(--color-accent);
     font-size: 1.8rem;
     font-weight: 300;
 }
@@ -59,11 +73,11 @@ button {
 }
 
 .btn-primary {
-    background: #00bcd4;
+    background: var(--color-accent);
 }
 
 .btn-primary:hover {
-    background: #00acc1;
+    background: var(--color-accent-dark);
     transform: translateY(-1px);
 }
 
@@ -143,7 +157,7 @@ main {
 }
 
 .status-item .value {
-    color: #00bcd4;
+    color: var(--color-accent);
     font-weight: 600;
     font-size: 1rem;
 }
@@ -246,7 +260,7 @@ footer {
 }
 
 .synthesis-info h3 {
-    color: #00bcd4;
+    color: var(--color-accent);
     font-size: 1.1rem;
     font-weight: 500;
     margin-bottom: 0.5rem;
@@ -275,7 +289,7 @@ footer {
 }
 
 .audio-events-header h3 {
-    color: #00bcd4;
+    color: var(--color-accent);
     font-size: 1.1rem;
     font-weight: 500;
     margin: 0;
@@ -319,9 +333,9 @@ footer {
 }
 
 .tab-btn.active {
-    color: #00bcd4;
+    color: var(--color-accent);
     background: #1a1a1a;
-    border-bottom-color: #00bcd4;
+    border-bottom-color: var(--color-accent);
 }
 
 /* Tab Content */
@@ -355,7 +369,7 @@ footer {
 }
 
 .event-count {
-    background: #00bcd4;
+    background: var(--color-accent);
     color: #1a1a1a;
     padding: 0.25rem 0.5rem;
     border-radius: 12px;
@@ -410,7 +424,7 @@ footer {
 }
 
 .route-id {
-    color: #00bcd4;
+    color: var(--color-accent);
     font-weight: 600;
 }
 
@@ -609,7 +623,7 @@ footer {
 }
 
 .footer-link:hover {
-    color: #00bcd4;
+    color: var(--color-accent);
 }
 
 .footer-icon {

@@ -79,58 +79,7 @@ app.get('/api/updates', async (req, res) => {
   }
 });
 
-// Debug endpoint for historical cache status
-app.get('/api/cache-stats', (req, res) => {
-  try {
-    const stats = historicalCache.getStats();
-    res.json({
-      historical: {
-        ...stats,
-        oldestAgeSeconds: Math.round(stats.oldestAge / 1000),
-        newestAgeSeconds: Math.round(stats.newestAge / 1000),
-        timeSpanSeconds: Math.round(stats.timeSpan / 1000)
-      },
-      ttlCache: {
-        size: cache.size()
-      }
-    });
-  } catch (error) {
-    console.error('Cache stats error:', error);
-    res.status(500).json({ error: 'Failed to get cache stats' });
-  }
-});
-
-// Debug endpoint for spatial index performance testing
-app.get('/api/spatial-test', async (req, res) => {
-  try {
-    const [buses, stops] = await Promise.all([
-      cache.getOrFetch('buses', () => metlink.getBuses(), CACHE_TTL.BUSES_MS),
-      cache.getOrFetch('stops', () => metlink.getStops(), CACHE_TTL.STOPS_MS)
-    ]);
-
-    // Calculate performance comparison
-    const totalStops = stops.length;
-    const activeBuses = buses.filter(bus => bus.vehicle && bus.vehicle.position).length;
-    const oldComplexity = activeBuses * totalStops; // O(buses × stops)
-    const estimatedNewComplexity = activeBuses * Math.ceil(totalStops / (50 * 50)); // Rough estimate assuming even distribution
-
-    res.json({
-      performance: {
-        totalStops,
-        activeBuses,
-        oldAlgorithmChecks: oldComplexity,
-        estimatedNewAlgorithmChecks: estimatedNewComplexity,
-        performanceImprovement: `${(oldComplexity / estimatedNewComplexity).toFixed(1)}x faster`,
-        checksPerSecond: `${(oldComplexity / 10).toLocaleString()} reduced to ~${(estimatedNewComplexity / 10).toLocaleString()}`
-      }
-    });
-  } catch (error) {
-    console.error('Spatial test error:', error);
-    res.status(500).json({ error: 'Failed to run spatial test' });
-  }
-});
-
-// Environment detection
+// Serve frontend static files with proper MIME types
 const isDevelopment = process.env.NODE_ENV === 'development';
 const frontendPath = isDevelopment
   ? path.join(__dirname, '../frontend')  // Development: serve from source frontend

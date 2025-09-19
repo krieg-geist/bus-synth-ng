@@ -6,7 +6,6 @@ const CONSTANTS = {
   },
   TIMING: {
     ROUTE_CLEANUP_INTERVAL_MS: 60000, // 1 minute
-    EARTH_RADIUS_METERS: 6371000,
     ARRIVAL_DEBOUNCE_MS: 30000, // 30 seconds between arrivals at same stop
     MAX_BLAST_DELAY_MS: 15000   // Don't play blasts for arrivals older than 15 seconds
   },
