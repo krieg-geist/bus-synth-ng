@@ -587,3 +587,32 @@ footer {
 .status-item .value.connecting {
     color: #ff9800;
 }
+
+/* footer */
+.footer {
+    background: #1a1a1a;
+    padding: 1rem 2rem;
+    border-top: 1px solid #333;
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+}
+
+.footer-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #ccc;
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+    color: #00bcd4;
+}
+
+.footer-icon {
+    width: 18px;
+    height: 18px;
+}

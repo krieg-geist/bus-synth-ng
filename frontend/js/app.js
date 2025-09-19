@@ -116,7 +116,7 @@ class BusSynthApp {
         }
       });
 
-      // Initialize route-based audio manager
+      // audio manager
       this.audioManager = new RoutePulseAudioManager(this.bounds);
 
       // Initialize WebSocket
@@ -132,7 +132,6 @@ class BusSynthApp {
         }
       }, CONSTANTS.TIMING.ROUTE_CLEANUP_INTERVAL_MS);
 
-      this.updateStatus('Ready - Canvas trails with Catmull-Rom splines optimize visual quality');
       console.log(`Initialized with ${this.stops.length} stops`);
 
       // Don't auto-start audio - let user start manually
@@ -174,31 +173,6 @@ class BusSynthApp {
     
     const stats = this.stopSpatialIndex.getStats();
     console.log(`Stop spatial index created: ${stats.totalItems} stops, ${stats.avgItemsPerCell} avg per cell, ${stats.cellSize.approxMeters} cell size`);
-    
-    // Quick performance test
-    this.testSpatialIndexPerformance();
-  }
-
-  testSpatialIndexPerformance() {
-    if (!this.stopSpatialIndex || this.stops.length === 0) return;
-    
-    // Test a few random points in Wellington
-    const testPoints = [
-      { lat: -41.2865, lon: 174.7762 }, // Wellington CBD
-      { lat: -41.3067, lon: 174.7811 }, // Courtenay Place
-      { lat: -41.2444, lon: 174.7633 }  // Thorndon
-    ];
-    
-    let totalNearbyStops = 0;
-    const radius = this.stopProximityThreshold * CONSTANTS.SPATIAL.SEARCH_RADIUS_MULTIPLIER;
-    
-    testPoints.forEach(point => {
-      const nearbyStops = this.stopSpatialIndex.getItemsInRadius(point.lat, point.lon, radius);
-      totalNearbyStops += nearbyStops.length;
-    });
-    
-    const avgNearbyStops = Math.round(totalNearbyStops / testPoints.length);
-    const performanceImprovement = Math.round(this.stops.length / avgNearbyStops);
   }
 
   toggleAudio() {
@@ -280,10 +254,9 @@ class BusSynthApp {
         }
       }));
       
-      // Detect stop arrivals using lagged positions (synchronized with visual)
+      // Detect stop arrivals using lagged positions
       this.detectStopArrivals(laggedBuses);
       
-      // Update audio using lagged route data (synchronized with visual)
       if (this.isAudioStarted && laggedRouteData.size > 0) {
         laggedRouteData.forEach((buses, routeId) => {
           this.audioManager.updateRoute(routeId, buses);
@@ -297,10 +270,10 @@ class BusSynthApp {
         });
       }
       
-      // Store current route data (use lagged data for consistency)
+      // Store current route data
       this.routeBusData = laggedRouteData;
       
-      // Update UI with lagged bus count but show the synchronization
+      // Update UI with lagged bus count
       const totalLaggedBuses = Array.from(laggedRouteData.values()).reduce((sum, buses) => sum + buses.length, 0);
       this.busCount.textContent = `${totalLaggedBuses} buses, ${laggedRouteData.size} routes`;
       
@@ -330,7 +303,7 @@ class BusSynthApp {
       const stopId = stopTimeUpdate.stop_id;
       const timestamp = arrival.time || currentTime;
       const rawRouteId = tripUpdate.trip?.route_id;
-      const routeId = this.cleanRouteId(rawRouteId); // Clean route ID consistently
+      const routeId = this.cleanRouteId(rawRouteId);
 
       // Store delay data for arrival blasts (adapted from Python implementation)
       if (stopId && delay > 10 && routeId) {
@@ -480,7 +453,7 @@ class BusSynthApp {
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
-    // Haversine formula for accurate geodetic distance
+    // Haversine formula for accurate geodetic distance? idk man
     const R = CONSTANTS.TIMING.EARTH_RADIUS_METERS;
     const φ1 = lat1 * Math.PI / 180;
     const φ2 = lat2 * Math.PI / 180;
@@ -574,9 +547,7 @@ class BusSynthApp {
     // Add to display before playing
     this.addArrivalEvent(routeId, stop.stop_id, delay, ageMs);
     
-    // Simple approach: play blast in X milliseconds if bus arrived X milliseconds ago
-    // This spreads out the blasts naturally based on actual arrival timing
-    const playDelayMs = Math.min(ageMs, 5000); // Cap at 5 seconds to avoid too long delays
+    const playDelayMs = Math.min(ageMs, 5000); // Cap at 5 seconds
     
     if (playDelayMs <= 100) {
       // Play immediately for very recent arrivals

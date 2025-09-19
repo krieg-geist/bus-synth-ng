@@ -60,16 +60,13 @@ class InterpolatedMapManager {
     this.trailFadeSteps = MAP_CONSTANTS.TRAIL.FADE_STEPS;
     this.lastSkipLog = 0; // Throttle skip logging
 
-    // Bus icon SVG template - oriented correctly without rotation hack
-    // Width=6 (bus width), Height=16 (bus length), front points upward (north)
+    // A lot of this shit should probably not be hardcoded
     this.busIconSvg = (color, rotation = 0, scale = 1) => `
       <svg width="${MAP_CONSTANTS.BUS_ICON.WIDTH * scale}" height="${MAP_CONSTANTS.BUS_ICON.HEIGHT * scale}" viewBox="0 0 ${MAP_CONSTANTS.BUS_ICON.WIDTH} ${MAP_CONSTANTS.BUS_ICON.HEIGHT}" style="transform: rotate(${rotation}deg)">
         <rect x="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH / 2}" y="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH / 2}" width="${MAP_CONSTANTS.BUS_ICON.WIDTH - MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" height="${MAP_CONSTANTS.BUS_ICON.HEIGHT - MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" fill="${color}" stroke="#fff" stroke-width="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" rx="${MAP_CONSTANTS.BUS_ICON.BORDER_RADIUS}"/>
       </svg>
     `;
 
-    // Anchor should place the front center of the bus exactly at the GPS coordinates
-    // Front center is at the middle of the front edge (width/2, 0)
     this.getFrontCenterAnchor = () => {
       return [MAP_CONSTANTS.BUS_ICON.WIDTH/2, MAP_CONSTANTS.BUS_ICON.HEIGHT / 2]; // Center horizontally, exactly at front edge
     };
@@ -168,7 +165,7 @@ class InterpolatedMapManager {
   }
 
   clearAllTrailsAndConnections() {
-    // Clear all canvas-based trails (replaces old polyline removal)
+    // Clear all canvas-based trails
     if (this.canvasTrailsLayer) {
       this.canvasTrailsLayer.clearAllTrails();
     }
@@ -205,7 +202,7 @@ class InterpolatedMapManager {
       const now = Date.now();
       const timeSinceLastFrame = now - this.lastAnimationTime;
 
-      // Detect large time gaps (indicates tab was unfocused or browser was throttled)
+      // Hopefully this will detect tab switching or long pauses
       if (timeSinceLastFrame > MAP_CONSTANTS.TIMING.MAX_TIME_GAP_MS) {
         console.log(`Large time gap detected (${(timeSinceLastFrame / 1000).toFixed(1)}s) - clearing trails`);
         this.clearAllTrailsAndConnections();
@@ -237,8 +234,6 @@ class InterpolatedMapManager {
       this.isProcessingHistoricalData = true;
       this.historicalDataCount++;
 
-      // Adjust historical timestamps to create a proper startup sequence
-      // Spread historical data over the last 90 seconds leading up to now
       const adjustedTimestamp = timestamp - (MAP_CONSTANTS.TIMING.HISTORICAL_SPREAD_MS - (this.historicalDataCount * MAP_CONSTANTS.TIMING.HISTORICAL_INTERVAL_MS));
 
       buses
@@ -246,7 +241,7 @@ class InterpolatedMapManager {
         .forEach(bus => {
           const busId = bus.vehicle.vehicle.id;
           const rawRouteId = bus.vehicle.trip.route_id;
-          // Clean route ID (remove trailing zeros, handle strings and numbers)
+          // Clean route ID
           const routeId = this.cleanRouteId(rawRouteId);
           const position = bus.vehicle.position;
 
@@ -506,7 +501,6 @@ class InterpolatedMapManager {
   }
 
   renderVisibleFeatures() {
-    // Canvas stops layer handles its own rendering automatically
     // Just force a redraw to update visible stops
     if (this.canvasStopsLayer) {
       this.canvasStopsLayer.forceRedraw();

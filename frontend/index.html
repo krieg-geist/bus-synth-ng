@@ -58,7 +58,7 @@
         <footer>
             <div class="synthesis-info">
                 <h3>Audio Synthesis</h3>
-                <p>Route topology synthesis: Bus count → logarithmic gain scaling | Route orientation → stereo panning | Route geographic spread → pitch modulation | Total city activity → master volume | Delays → rhythm disruption | Arrivals → noise blasts</p>
+                <p>Bus count:  gain <br> Route orientation:  panning <br> Route geographic spread:  pitch mod <br> Total city activity:  master volume <br> Delays:  rhythm disruption <br> Arrivals:  noise blasts</p>
             </div>
             
             <div class="audio-events-container">
@@ -111,6 +111,18 @@
                 </div>
             </div>
         </footer>
+        
+        <div class="footer">
+            You are cordially invited to mess with this code:
+            <a href="https://github.com/krieg-geist/bus-synth-ng" target="_blank" rel="noopener noreferrer" class="footer-link">
+                <img src="https://s.magecdn.com/social/tc-github.svg" alt="GitHub" class="footer-icon">
+                Source
+            </a>
+            <a href="https://instagram.com/delusions_of_adequacy" target="_blank" rel="noopener noreferrer" class="footer-link">
+                <img src="https://s.magecdn.com/social/tc-instagram.svg" alt="Instagram" class="footer-icon">
+                Instagram
+            </a>
+        </div>
     </div>
 
     <script src="js/websocket.js"></script>
@@ -130,16 +142,16 @@
             const eventsContent = document.getElementById('audio-events-content');
             
             // Tab switching
-            tabButtons.forEach(btn => {
-                btn.addEventListener('click', () => {
+            tabButtons.forEach(btn:  {
+                btn.addEventListener('click', ():  {
                     const tabId = btn.dataset.tab;
                     
                     // Update active tab button
-                    tabButtons.forEach(b => b.classList.remove('active'));
+                    tabButtons.forEach(b:  b.classList.remove('active'));
                     btn.classList.add('active');
                     
                     // Update active tab panel
-                    tabPanels.forEach(panel => {
+                    tabPanels.forEach(panel:  {
                         panel.classList.remove('active');
                         if (panel.id === `${tabId}-tab`) {
                             panel.classList.add('active');
@@ -149,7 +161,7 @@
             });
             
             // Toggle events panel
-            toggleBtn.addEventListener('click', () => {
+            toggleBtn.addEventListener('click', ():  {
                 const isHidden = eventsContent.style.display === 'none';
                 eventsContent.style.display = isHidden ? 'block' : 'none';
                 toggleBtn.textContent = isHidden ? 'Hide' : 'Show';

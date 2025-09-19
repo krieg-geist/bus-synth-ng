@@ -23,4 +23,4 @@ fi
 # Start the server
 echo "Starting server..."
 cd backend
-npm start
+npm run dev

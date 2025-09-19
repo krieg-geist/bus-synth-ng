@@ -192,7 +192,7 @@ class CanvasStopsLayer extends L.Layer {
           // Calculate animation values
           const easeOut = 1 - Math.pow(1 - progress, 3);
           scale = 1 + (animation.maxScale - 1) * Math.sin(easeOut * Math.PI);
-          alpha = 1 - progress * 0.3; // Slight fade during animation
+          alpha = 1 - progress * 0.3; // Slight fade
         }
       }
       
@@ -214,16 +214,16 @@ class CanvasStopsLayer extends L.Layer {
     
     this.ctx.save();
     
-    // Draw outer glow layers for animated stops (most pronounced)
+    // Draw outer glow layers for animated stops
     if (isAnimating) {
       const glowIntensity = (scale - 1) / (this.options.maxAnimationScale - 1);
       
-      // Outer glow (largest, most subtle)
+      // Outer glow
       const outerRadius = radius * 2.5;
       const outerGradient = this.ctx.createRadialGradient(x, y, 0, x, y, outerRadius);
-      outerGradient.addColorStop(0, this.options.stopColor + '40'); // 25% opacity
-      outerGradient.addColorStop(0.3, this.options.stopColor + '20'); // 12% opacity
-      outerGradient.addColorStop(1, this.options.stopColor + '00'); // 0% opacity
+      outerGradient.addColorStop(0, this.options.stopColor + '40');
+      outerGradient.addColorStop(0.3, this.options.stopColor + '20');
+      outerGradient.addColorStop(1, this.options.stopColor + '00');
       
       this.ctx.beginPath();
       this.ctx.arc(x, y, outerRadius, 0, Math.PI * 2);
@@ -234,9 +234,9 @@ class CanvasStopsLayer extends L.Layer {
       // Middle glow (more pronounced)
       const middleRadius = radius * 1.8;
       const middleGradient = this.ctx.createRadialGradient(x, y, 0, x, y, middleRadius);
-      middleGradient.addColorStop(0, this.options.stopColor + '80'); // 50% opacity
-      middleGradient.addColorStop(0.5, this.options.stopColor + '40'); // 25% opacity
-      middleGradient.addColorStop(1, this.options.stopColor + '00'); // 0% opacity
+      middleGradient.addColorStop(0, this.options.stopColor + '80');
+      middleGradient.addColorStop(0.5, this.options.stopColor + '40');
+      middleGradient.addColorStop(1, this.options.stopColor + '00');
       
       this.ctx.beginPath();
       this.ctx.arc(x, y, middleRadius, 0, Math.PI * 2);
@@ -247,9 +247,9 @@ class CanvasStopsLayer extends L.Layer {
     
     // Main stop circle with radial fade
     const coreGradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius);
-    coreGradient.addColorStop(0, this.options.stopColor + 'FF'); // 100% opacity at center
-    coreGradient.addColorStop(0.7, this.options.stopColor + 'CC'); // 80% opacity
-    coreGradient.addColorStop(1, this.options.stopColor + '99'); // 60% opacity at edge
+    coreGradient.addColorStop(0, this.options.stopColor + 'FF');
+    coreGradient.addColorStop(0.7, this.options.stopColor + 'CC');
+    coreGradient.addColorStop(1, this.options.stopColor + '99');
     
     this.ctx.beginPath();
     this.ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -300,7 +300,7 @@ class CanvasStopsLayer extends L.Layer {
     }
   }
 
-  // Batch update multiple stop animations (for efficiency)
+  // Batch update stop animations
   animateMultipleStops(stopAnimations) {
     let hasNewAnimations = false;
     

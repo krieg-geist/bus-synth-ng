@@ -24,5 +24,5 @@ if not exist "backend\node_modules" (
 REM Start the server
 echo Starting server...
 cd backend
-npm start
+npm run dev
 pause
