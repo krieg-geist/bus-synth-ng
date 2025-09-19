@@ -19,6 +19,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.2.7/Tone.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/constants.js"></script>
 </head>
 <body>
     <div class="container">
@@ -143,16 +144,16 @@
             const eventsContent = document.getElementById('audio-events-content');
             
             // Tab switching
-            tabButtons.forEach(btn:  {
-                btn.addEventListener('click', ():  {
+            tabButtons.forEach(btn=>  {
+                btn.addEventListener('click', () =>  {
                     const tabId = btn.dataset.tab;
                     
                     // Update active tab button
-                    tabButtons.forEach(b:  b.classList.remove('active'));
+                    tabButtons.forEach(b=>  b.classList.remove('active'));
                     btn.classList.add('active');
                     
                     // Update active tab panel
-                    tabPanels.forEach(panel:  {
+                    tabPanels.forEach(panel =>  {
                         panel.classList.remove('active');
                         if (panel.id === `${tabId}-tab`) {
                             panel.classList.add('active');
@@ -162,7 +163,7 @@
             });
             
             // Toggle events panel
-            toggleBtn.addEventListener('click', ():  {
+            toggleBtn.addEventListener('click', () =>  {
                 const isHidden = eventsContent.style.display === 'none';
                 eventsContent.style.display = isHidden ? 'block' : 'none';
                 toggleBtn.textContent = isHidden ? 'Hide' : 'Show';

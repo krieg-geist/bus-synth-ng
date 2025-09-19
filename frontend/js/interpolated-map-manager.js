@@ -1,30 +1,4 @@
-// Constants
-const MAP_CONSTANTS = {
-  TIMING: {
-    DISPLAY_LAG_MS: 60000,      // 1 minute lag
-    MAX_HISTORY_AGE_MS: 180000, // 3 minutes of history
-    HISTORICAL_SPREAD_MS: 90000, // Spread historical data over 90s
-    HISTORICAL_INTERVAL_MS: 10000, // 10s between historical entries
-    MAX_TIME_GAP_MS: 30000      // Max gap before clearing trails (30s)
-  },
-  TRAIL: {
-    LENGTH_SEGMENTS: 15,
-    FADE_STEPS: 8,
-    MAX_SEGMENT_DISTANCE_M: 800 // Maximum meters between trail points
-  },
-  BUS_ICON: {
-    WIDTH: 6,
-    HEIGHT: 16,
-    STROKE_WIDTH: 1,
-    BORDER_RADIUS: 0.5
-  },
-  STOP_PULSE: {
-    WIDTH: 12,
-    HEIGHT: 12,
-    OUTER_RADIUS: 5,
-    INNER_RADIUS: 3
-  }
-};
+const MAP_CONSTANTS = SHARED_CONSTANTS.MAP;
 
 class InterpolatedMapManager {
   constructor(containerId) {

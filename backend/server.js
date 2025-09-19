@@ -7,35 +7,18 @@ const fs = require('fs');
 const MetlinkClient = require('./metlink-client');
 const Cache = require('./cache');
 const HistoricalDataCache = require('./historical-cache');
-
-// Constants
-const CACHE_TTL = {
-  BUSES_MS: 8000,        // 8 seconds
-  STOPS_MS: 86400000,    // 24 hours
-  UPDATES_MS: 30000      // 30 seconds
-};
-
-const POLLING = {
-  BROADCAST_INTERVAL_MS: 10000,  // 10 seconds
-  STARTUP_DELAY_MS: 2000         // 2 seconds
-};
-
-const HISTORICAL_CACHE_CONFIG = {
-  MAX_AGE_MS: 90000,      // 90 seconds
-  CLEANUP_INTERVAL_MS: 30000,  // 30 seconds
-  MAX_ENTRIES: 50         // Safety limit
-};
+const SHARED_CONSTANTS = require('../shared/constants');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const WS_PORT = process.env.WS_PORT || 8765;
+const PORT = process.env.PORT || SHARED_CONSTANTS.NETWORK.DEFAULT_HTTP_PORT;
+const WS_PORT = process.env.WS_PORT || SHARED_CONSTANTS.NETWORK.DEFAULT_WS_PORT;
 
 // Initialize cache, historical cache, and Metlink client
 const cache = new Cache();
 const historicalCache = new HistoricalDataCache({
-  maxAge: HISTORICAL_CACHE_CONFIG.MAX_AGE_MS,
-  cleanupInterval: HISTORICAL_CACHE_CONFIG.CLEANUP_INTERVAL_MS,
-  maxEntries: HISTORICAL_CACHE_CONFIG.MAX_ENTRIES
+  maxAge: SHARED_CONSTANTS.CACHE.HISTORICAL_MAX_AGE_MS,
+  cleanupInterval: SHARED_CONSTANTS.CACHE.HISTORICAL_CLEANUP_INTERVAL_MS,
+  maxEntries: SHARED_CONSTANTS.CACHE.HISTORICAL_MAX_ENTRIES
 });
 const metlink = new MetlinkClient(process.env.METLINK_API_KEY);
 
@@ -51,7 +34,7 @@ app.use(express.json());
 // API Routes (before static files to avoid conflicts)
 app.get('/api/buses', async (req, res) => {
   try {
-    const data = await cache.getOrFetch('buses', () => metlink.getBuses(), CACHE_TTL.BUSES_MS);
+    const data = await cache.getOrFetch('buses', () => metlink.getBuses(), SHARED_CONSTANTS.CACHE.BUSES_TTL_MS);
     res.json(data);
   } catch (error) {
     console.error('Bus data error:', error);
@@ -61,7 +44,7 @@ app.get('/api/buses', async (req, res) => {
 
 app.get('/api/stops', async (req, res) => {
   try {
-    const data = await cache.getOrFetch('stops', () => metlink.getStops(), CACHE_TTL.STOPS_MS);
+    const data = await cache.getOrFetch('stops', () => metlink.getStops(), SHARED_CONSTANTS.CACHE.STOPS_TTL_MS);
     res.json(data);
   } catch (error) {
     console.error('Stop data error:', error);
@@ -71,7 +54,7 @@ app.get('/api/stops', async (req, res) => {
 
 app.get('/api/updates', async (req, res) => {
   try {
-    const data = await cache.getOrFetch('updates', () => metlink.getUpdates(), CACHE_TTL.UPDATES_MS);
+    const data = await cache.getOrFetch('updates', () => metlink.getUpdates(), SHARED_CONSTANTS.CACHE.UPDATES_TTL_MS);
     res.json(data);
   } catch (error) {
     console.error('Updates data error:', error);
@@ -135,8 +118,8 @@ console.log(`WebSocket server running on port ${WS_PORT}`);
 const broadcastUpdates = async () => {
   try {
     const [buses, updates] = await Promise.all([
-      cache.getOrFetch('buses', () => metlink.getBuses(), CACHE_TTL.BUSES_MS),
-      cache.getOrFetch('updates', () => metlink.getUpdates(), CACHE_TTL.UPDATES_MS)
+      cache.getOrFetch('buses', () => metlink.getBuses(), SHARED_CONSTANTS.CACHE.BUSES_TTL_MS),
+      cache.getOrFetch('updates', () => metlink.getUpdates(), SHARED_CONSTANTS.CACHE.UPDATES_TTL_MS)
     ]);
 
     // Store in historical cache for new connections
@@ -206,7 +189,7 @@ wss.on('connection', (ws) => {
 
 // Start broadcasting updates every 10 seconds 
 // Optimized based on Wellington bus analysis: 11.1s avg update interval, 95.8% updates within 30s
-setInterval(broadcastUpdates, POLLING.BROADCAST_INTERVAL_MS);
+setInterval(broadcastUpdates, SHARED_CONSTANTS.POLLING.BROADCAST_INTERVAL_MS);
 
 // Initialize historical cache with some data on startup
 const initializeHistoricalCache = async () => {
@@ -219,7 +202,7 @@ const initializeHistoricalCache = async () => {
     setTimeout(async () => {
       await broadcastUpdates();
       console.log('Historical cache initialized with startup data');
-    }, POLLING.STARTUP_DELAY_MS);
+    }, SHARED_CONSTANTS.POLLING.STARTUP_DELAY_MS);
   } catch (error) {
     console.error('Error initializing historical cache:', error);
   }

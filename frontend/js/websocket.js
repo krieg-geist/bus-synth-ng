@@ -3,8 +3,8 @@ class WebSocketClient {
     this.ws = null;
     this.isConnected = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.reconnectDelay = 1000;
+    this.maxReconnectAttempts = SHARED_CONSTANTS.NETWORK.WS_RECONNECT_MAX_ATTEMPTS;
+    this.reconnectDelay = SHARED_CONSTANTS.NETWORK.WS_RECONNECT_BASE_DELAY;
     this.onMessage = null;
     this.onStatusChange = null;
   }
@@ -16,7 +16,7 @@ class WebSocketClient {
     // Detect environment and configure WebSocket URL accordingly
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       // Development: Connect directly to WebSocket server port
-      const wsPort = 8765; // Match WS_PORT from server.js
+      const wsPort = SHARED_CONSTANTS.NETWORK.DEFAULT_WS_PORT;
       wsUrl = `${protocol}//${window.location.hostname}:${wsPort}`;
     } else {
       // Production: Use proxied path through main web server

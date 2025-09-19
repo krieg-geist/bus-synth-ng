@@ -1,20 +1,3 @@
-// Constants
-const CONSTANTS = {
-  PROXIMITY: {
-    STOP_THRESHOLD_METERS: 100,
-    APPROACH_THRESHOLD_METERS: 20
-  },
-  TIMING: {
-    ROUTE_CLEANUP_INTERVAL_MS: 60000, // 1 minute
-    ARRIVAL_DEBOUNCE_MS: 30000, // 30 seconds between arrivals at same stop
-    MAX_BLAST_DELAY_MS: 15000   // Don't play blasts for arrivals older than 15 seconds
-  },
-  SPATIAL: {
-    GRID_SIZE: 50, // 50x50 grid for Wellington (~800m cells)
-    SEARCH_RADIUS_MULTIPLIER: 2 // Search radius = threshold × multiplier
-  }
-};
-
 class BusSynthApp {
   constructor() {
     this.wsClient = null;
@@ -29,7 +12,7 @@ class BusSynthApp {
     this.lastBusPositions = new Map(); // for detecting arrivals
     this.recentArrivals = new Map(); // debounce arrivals: "busId-stopId" -> timestamp
     this.stopDelays = new Map(); // store delay data: "stopId" -> {delay, routeId, timestamp}
-    this.stopProximityThreshold = CONSTANTS.PROXIMITY.STOP_THRESHOLD_METERS;
+    this.stopProximityThreshold = SHARED_CONSTANTS.PROXIMITY.STOP_THRESHOLD_METERS;
 
     // UI elements
     this.audioToggleBtn = document.getElementById('audio-toggle-btn');
@@ -129,7 +112,7 @@ class BusSynthApp {
         if (this.audioManager) {
           this.audioManager.cleanupInactiveRoutes();
         }
-      }, CONSTANTS.TIMING.ROUTE_CLEANUP_INTERVAL_MS);
+      }, SHARED_CONSTANTS.POLLING.ROUTE_CLEANUP_INTERVAL_MS);
 
       console.log(`Initialized with ${this.stops.length} stops`);
 
@@ -163,7 +146,7 @@ class BusSynthApp {
     if (!this.bounds || this.stops.length === 0) return;
 
     // Create spatial index with configurable grid size
-    this.stopSpatialIndex = new SpatialIndex(this.bounds, CONSTANTS.SPATIAL.GRID_SIZE);
+    this.stopSpatialIndex = new SpatialIndex(this.bounds, SHARED_CONSTANTS.PROXIMITY.GRID_SIZE);
     
     // Index all stops
     this.stops.forEach(stop => {
@@ -369,19 +352,19 @@ class BusSynthApp {
       const nearbyStops = this.stopSpatialIndex.getItemsInRadius(
         currentPos.latitude, 
         currentPos.longitude, 
-        this.stopProximityThreshold * CONSTANTS.SPATIAL.SEARCH_RADIUS_MULTIPLIER
+        this.stopProximityThreshold * SHARED_CONSTANTS.PROXIMITY.SEARCH_RADIUS_MULTIPLIER
       );
 
       // Check only the nearby stops instead of all 2000+ stops
       nearbyStops.forEach(stop => {
-        const distanceToStop = this.calculateDistance(
+        const distanceToStop = Utils.calculateDistance(
           currentPos.latitude,
           currentPos.longitude,
           stop.stop_lat,
           stop.stop_lon
         );
 
-        const lastDistanceToStop = lastPos ? this.calculateDistance(
+        const lastDistanceToStop = lastPos ? Utils.calculateDistance(
           lastPos.lat,
           lastPos.lon,
           stop.stop_lat,
@@ -396,8 +379,8 @@ class BusSynthApp {
         // Trigger animation if bus is close to stop and getting closer AND hasn't recently arrived
         if (distanceToStop < this.stopProximityThreshold &&
           lastDistanceToStop > distanceToStop &&
-          distanceToStop < lastDistanceToStop - CONSTANTS.PROXIMITY.APPROACH_THRESHOLD_METERS &&
-          timeSinceLastArrival > CONSTANTS.TIMING.ARRIVAL_DEBOUNCE_MS) {
+          distanceToStop < lastDistanceToStop - SHARED_CONSTANTS.PROXIMITY.APPROACH_THRESHOLD_METERS &&
+          timeSinceLastArrival > SHARED_CONSTANTS.POLLING.ARRIVAL_DEBOUNCE_MS) {
 
           // Calculate when the bus actually crossed the proximity threshold
           const actualArrivalTime = this.interpolateArrivalTime(
@@ -451,24 +434,8 @@ class BusSynthApp {
     });
   }
 
-  calculateDistance(lat1, lon1, lat2, lon2) {
-    // Haversine formula for accurate geodetic distance? idk man
-    const R = CONSTANTS.TIMING.EARTH_RADIUS_METERS;
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
-    return R * c; // Distance in meters
-  }
-
   cleanupOldArrivals(currentTime) {
-    const cutoffTime = currentTime - CONSTANTS.TIMING.ARRIVAL_DEBOUNCE_MS * 2; // Keep double the debounce time
+    const cutoffTime = currentTime - SHARED_CONSTANTS.POLLING.ARRIVAL_DEBOUNCE_MS * 2; // Keep double the debounce time
     let cleanedCount = 0;
     
     for (const [key, timestamp] of this.recentArrivals.entries()) {
@@ -502,10 +469,10 @@ class BusSynthApp {
   interpolateArrivalTime(lastPos, currentPos, stop, threshold) {
     // Calculate when the bus actually crossed the proximity threshold
     
-    const lastDistance = this.calculateDistance(
+    const lastDistance = Utils.calculateDistance(
       lastPos.lat, lastPos.lon, stop.stop_lat, stop.stop_lon
     );
-    const currentDistance = this.calculateDistance(
+    const currentDistance = Utils.calculateDistance(
       currentPos.lat, currentPos.lon, stop.stop_lat, stop.stop_lon
     );
     
@@ -538,7 +505,7 @@ class BusSynthApp {
     const ageMs = now - arrivalTime;
     
     // Don't play blasts for very old arrivals
-    if (ageMs > CONSTANTS.TIMING.MAX_BLAST_DELAY_MS) {
+    if (ageMs > SHARED_CONSTANTS.POLLING.MAX_BLAST_DELAY_MS) {
       console.log(`Skipping arrival blast - too old (${(ageMs/1000).toFixed(1)}s ago)`);
       return;
     }
