@@ -13,6 +13,7 @@
     --accent: #5eead4;
     --accent-ink: #04211d;
     --train: #fbbf24;
+    --ferry: #4f9dff;
     --early: #7dd3fc;
     --late: #fbbf24;
     --very-late: #fb7185;
@@ -59,13 +60,34 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .leaflet-tooltip.bus-tooltip {
     background: var(--glass-strong); border: 1px solid var(--line-strong); color: var(--text);
-    border-radius: 8px; padding: 3px 8px; font-size: 11.5px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    border-radius: 10px; padding: 7px 10px 6px; font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px); white-space: nowrap;
 }
 .leaflet-tooltip.bus-tooltip::before { display: none; }
+.tip-head { display: flex; align-items: center; gap: 7px; }
+.tip-head .chip { min-width: 0; }
+.tip-note { font: 11px var(--mono); color: var(--dim); }
+.tip-facts { margin-top: 4px; font: 11px var(--mono); color: var(--dim); }
+.tip-facts i { font-style: normal; color: var(--faint); margin: 0 5px; }
+.tip-hint { margin-top: 3px; font-size: 10px; color: var(--faint); }
+
+/* Shown while the camera follows a vehicle */
+.follow-pill {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 999px;
+    font-size: 12px; color: var(--dim);
+}
+.follow-pill[hidden] { display: none; }
+.follow-pill span { display: inline-flex; align-items: center; gap: 6px; }
+.follow-pill button { width: 24px; height: 24px; border-radius: 50%; color: var(--dim); font-size: 15px; line-height: 1; }
+.follow-pill button:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 
 .vehicle-marker { background: none; border: 0; }
 .vehicle-marker svg { display: block; filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9)); }
 .vehicle-marker.train svg { filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.45)) drop-shadow(0 0 2px rgba(0, 0, 0, 0.9)); }
+.vehicle-marker.ferry svg { filter: drop-shadow(0 0 5px rgba(79, 157, 255, 0.55)) drop-shadow(0 0 2px rgba(0, 0, 0, 0.9)); }
+.vehicle-marker { cursor: pointer; }
+.vehicle-marker.following svg { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 8px rgba(255, 255, 255, 0.7)); }
 .leaflet-canvas-stops-layer { pointer-events: none; }
 
 /* Listening crosshair at the map centre; the ring marks half strength and fades out when zoomed right out */
@@ -115,6 +137,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 .status .stat b { color: var(--text); font-weight: 500; margin-right: 2px; }
 .status .stat.train b { color: var(--train); }
+.status .stat.ferry b { color: var(--ferry); }
+.status .stat[hidden] { display: none; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
 .dot.connected { background: var(--ok); box-shadow: 0 0 0 3px rgba(134, 239, 172, 0.15); }
 .dot.connecting { background: var(--late); }
@@ -188,17 +212,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .panel.collapsed .panel-tab { color: var(--accent); }
 .panel.collapsed .panel-tab .icon { transform: rotate(180deg); }
 
-.infobox {
-    position: relative; margin-bottom: 10px; padding: 10px 30px 10px 12px; border-radius: 10px;
-    background: rgba(94, 234, 212, 0.07); border: 1px solid rgba(94, 234, 212, 0.18);
-    color: var(--text); font-size: 12px; line-height: 1.5;
-}
-.infobox[hidden] { display: none; }
-.infobox-close {
-    position: absolute; top: 4px; right: 6px; width: 22px; height: 22px; border-radius: 6px;
-    color: var(--dim); font-size: 16px; line-height: 1;
-}
-.infobox-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 
 .tab-panels { flex: 1 1 auto; min-height: 60px; overflow-y: auto; overscroll-behavior: contain; margin-right: -6px; padding-right: 6px; }
 
@@ -207,6 +220,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .swatch { display: inline-block; flex: none; }
 .swatch-bus { width: 16px; height: 6px; border-radius: 2px; background: linear-gradient(90deg, #5eead4, #7dd3fc, #a5b4fc, #86efac, #d8b4fe); }
 .swatch-train { width: 18px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #fbbf24, #fb923c, #f87171); }
+.swatch-ferry { width: 16px; height: 8px; border-radius: 8px 8px 3px 3px; background: var(--ferry); }
 .swatch-arrival { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text); }
 .swatch-turn { width: 9px; height: 9px; border: 1.5px dashed var(--text); }
 
@@ -254,6 +268,52 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .links a:hover, .link-btn:hover { color: var(--text); }
 .link-btn { margin-left: auto; font-size: 11.5px; }
 
+/* ---------- Intro popup ---------- */
+
+.intro {
+    margin: auto; width: min(580px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow-y: auto;
+    padding: 26px 28px 0; border-radius: 20px; border: 1px solid var(--line-strong);
+    background: rgba(11, 15, 22, 0.94); color: var(--text);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.intro[open] { animation: intro-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.intro::backdrop { background: rgba(3, 5, 8, 0.55); backdrop-filter: blur(4px); }
+@keyframes intro-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+
+.intro h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.24em; text-transform: uppercase; color: var(--accent); }
+.intro .lede { margin: 8px 0 14px; font-size: 18px; line-height: 1.35; font-weight: 500; }
+.intro section {
+    display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start;
+    padding: 11px 0; border-top: 1px solid var(--line);
+}
+.intro section > i { margin-top: 5px; justify-self: center; }
+.intro h3 { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.intro section p { font-size: 12.5px; line-height: 1.6; color: var(--dim); }
+.intro .tech {
+    font-family: var(--mono); font-size: 11.5px; color: var(--text);
+    background: rgba(255, 255, 255, 0.06); border-radius: 4px; padding: 0 4px; white-space: nowrap;
+}
+.glyph-wave {
+    display: inline-block; width: 18px; height: 10px;
+    background: linear-gradient(90deg, #5eead4, #a5b4fc);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 10'%3E%3Cpath d='M1 5c2-5 4-5 6 0s4 5 6 0 3-4 4-2' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 10'%3E%3Cpath d='M1 5c2-5 4-5 6 0s4 5 6 0 3-4 4-2' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Pinned to the bottom of the card, so the button is reachable without scrolling on a phone */
+.intro-actions {
+    position: sticky; bottom: 0; display: flex; gap: 10px; padding: 14px 0 20px;
+    background: rgba(11, 15, 22, 0.97); box-shadow: 0 -10px 10px rgba(11, 15, 22, 0.97);
+}
+.pill-primary {
+    display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; transition: transform 0.15s, background 0.15s, color 0.15s;
+}
+.pill-primary { background: var(--accent); color: var(--accent-ink); }
+.pill-primary .icon { width: 16px; height: 16px; }
+.pill-primary:hover { transform: translateY(-1px); }
+.intro-foot { padding: 10px 0 18px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); }
+
 /* ---------- Small screens ---------- */
 
 @media (max-width: 640px) {
@@ -264,6 +324,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
         justify-content: space-between; gap: 8px; padding-right: 8px;
     }
     .volume input[type="range"] { width: 60px; }
+    .intro { padding: 20px 18px 0; }
+    .follow-pill { top: 50px; }
+    .intro .lede { font-size: 16px; }
     .segmented label { padding: 4px 8px; font-size: 11px; }
     .leaflet-control-zoom.leaflet-bar { margin-bottom: 76px !important; }
     .panel { left: 43px; right: 10px; width: auto; max-height: calc(100dvh - 54px - 80px); }
@@ -274,6 +337,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .play[aria-pressed="true"]::after, .row.fresh { animation: none; }
+    .play[aria-pressed="true"]::after, .row.fresh, .intro[open] { animation: none; }
     .panel, .panel-tab .icon { transition: none; }
 }

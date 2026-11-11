@@ -1,6 +1,8 @@
 // Colour = sound: a bus takes the colour of its note (D pentatonic degrees), a train the colour of its line
 const NOTE_COLORS = { 0: '#5eead4', 2: '#7dd3fc', 4: '#a5b4fc', 7: '#86efac', 9: '#d8b4fe' }; // D E F# A B
 const LINE_COLORS = { KPL: '#fbbf24', HVL: '#fb923c', MEL: '#fdba74', JVL: '#facc15', WRL: '#f87171' };
+const FERRY_COLOR = '#4f9dff';
+const OCCUPANCY = ['empty', 'many seats', 'few seats', 'standing room', 'packed', 'full']; // GTFS-RT occupancy_status
 const RIPPLE_SHAPES = { city: [0, 0], hutt: [6, 0], north: [3, -Math.PI / 2], rail: [4, Math.PI / 4], special: [4, 0] }; // [sides, rotation]
 const mixHex = (a, b, t) => '#' + [1, 3, 5].map(i =>
   Math.round(parseInt(a.slice(i, i + 2), 16) * (1 - t) + parseInt(b.slice(i, i + 2), 16) * t).toString(16).padStart(2, '0')).join('');
@@ -20,6 +22,8 @@ class BusSynthApp {
     this.routeStates = new Map(); // route -> { n, delay, kmh, bunched, lon }
     this.seenStops = new Map(); // trip_id -> last stop_sequence played
     this.vehicleTrip = new Map(); // vehicle id -> trip_id from positions, to spot turnarounds
+    this.docked = new Set(); // ferry ids currently at a wharf
+    this.wharves = Object.values(window.ROUTE_META || {}).filter(m => m.type === 4).flatMap(m => m.stops || []); // [lat, lon, name]
     this.vehicleDelay = new Map(); // vehicle id -> signed delay (s)
     this.vehicleOccupancy = new Map(); // vehicle id -> GTFS-RT occupancy_status
     this.lastStatePositions = new Map(); // bus id -> { lat, lon, t, kmh } for speed
@@ -36,6 +40,8 @@ class BusSynthApp {
     this.audioStatus = document.getElementById('audio-status');
     this.countBuses = document.getElementById('count-buses');
     this.countTrains = document.getElementById('count-trains');
+    this.countFerries = document.getElementById('count-ferries');
+    this.followPill = document.getElementById('follow-pill');
     this.routesCount = document.getElementById('routes-count');
     this.arrivalsCount = document.getElementById('arrivals-count');
     this.delaysCount = document.getElementById('delays-count');
@@ -75,6 +81,7 @@ class BusSynthApp {
       }));
 
     this.clearEventsBtn.addEventListener('click', () => this.clearAudioEvents());
+    document.getElementById('follow-stop').addEventListener('click', () => this.mapManager?.unfollow());
 
     const panel = document.getElementById('panel');
     const toggle = document.getElementById('toggle-events');
@@ -87,13 +94,16 @@ class BusSynthApp {
     toggle.addEventListener('click', () => setOpen(panel.classList.contains('collapsed')));
     if (window.matchMedia('(max-width: 640px)').matches) setOpen(false); // phones: start with the map
 
-    // The how-it-works box can be dismissed, and stays dismissed for this browser
-    const infobox = document.getElementById('infobox');
-    try { infobox.hidden = localStorage.getItem('infobox-dismissed') === '1'; } catch { /* storage blocked */ }
-    document.getElementById('infobox-close').addEventListener('click', () => {
-      infobox.hidden = true;
-      try { localStorage.setItem('infobox-dismissed', '1'); } catch { /* storage blocked */ }
+    // Intro popup on start. "Start listening" is also the click browsers need before audio may play.
+    const intro = document.getElementById('intro');
+    const showIntro = () => { intro.showModal(); intro.scrollTop = 0; }; // focus lands on the button; start at the top
+    showIntro();
+    document.getElementById('intro-listen').addEventListener('click', () => { intro.close(); this.startAudio(); });
+    intro.addEventListener('click', e => { // a click on the backdrop, outside the card, closes it
+      const r = intro.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) intro.close();
     });
+    document.getElementById('about-btn').addEventListener('click', showIntro);
     const tabs = document.querySelectorAll('.tab-btn');
     tabs.forEach(btn => btn.addEventListener('click', () => {
       tabs.forEach(b => { b.classList.toggle('active', b === btn); b.setAttribute('aria-selected', b === btn); });
@@ -113,7 +123,11 @@ class BusSynthApp {
       this.calculateBounds();
 
       // Initialize map
-      this.mapManager = new InterpolatedMapManager('map-container', { colorFor: route => this.colorFor(route) });
+      this.mapManager = new InterpolatedMapManager('map-container', {
+        colorFor: route => this.colorFor(route),
+        describe: (id, route) => this.describe(id, route),
+        onFollow: (id, route) => this.showFollowing(id, route)
+      });
       await this.mapManager.initialize(this.stops, this.bounds);
 
       // Handle window resize for map
@@ -125,6 +139,10 @@ class BusSynthApp {
 
       this.audio = new RouteSynth({ place: (lat, lon) => this.place(lat, lon) });
       this.mapManager.map.on('moveend', () => this.updateRouteStates()); // re-place sound as soon as the view settles
+      // ...and keep re-placing it while the camera moves (about 8 times a second), not just when it stops
+      this.mapManager.map.on('move', () => {
+        this.moveTimer ??= setTimeout(() => { this.moveTimer = null; this.updateRouteStates(); }, 120);
+      });
       this.mapManager.map.on('move zoom resize', () => this.updateReticle());
       this.audio.setModes(this.modes);
       this.updateReticle();
@@ -305,11 +323,12 @@ class BusSynthApp {
     const positions = new Map();
     const states = new Map();
     const trains = [];
+    const ferries = [];
     const buses = [];
     let total = 0, bunchedTotal = 0, delaySum = 0, delayN = 0, early = 0;
 
     routes.forEach((list, route) => {
-      const rail = Utils.routeType(route) === 2;
+      const type = Utils.routeType(route);
       let kmh = 0, nk = 0, delay = 0, nd = 0, latSum = 0, lonSum = 0, bunched = 0, nearest = null;
       list.forEach((bus, i) => {
         const p = bus.position;
@@ -327,8 +346,10 @@ class BusSynthApp {
         lonSum += p.longitude;
         const place = this.place(p.latitude, p.longitude);
         if (!nearest || place.near > nearest.near) nearest = { lat: p.latitude, lon: p.longitude, near: place.near };
-        if (rail) trains.push({ id: bus.id, route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh });
-        else buses.push({ route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh, place });
+        const vehicle = { id: bus.id, route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh };
+        if (type === 2) trains.push(vehicle);
+        else if (type === 4) ferries.push(vehicle);
+        else buses.push({ ...vehicle, place });
         // Bunched: another vehicle on the route within 300 m heading roughly the same way
         for (let j = i + 1; j < list.length; j++) {
           const q = list[j].position;
@@ -388,6 +409,7 @@ class BusSynthApp {
     if (traffic.moving) traffic.speed /= traffic.moving;
     if (weight) traffic.pan /= weight;
 
+    this.detectDocking(ferries);
     this.arrivalTimes = this.arrivalTimes.filter(t => now - t < 60000);
     this.lastStatePositions = positions;
     this.routeStates = states;
@@ -396,6 +418,7 @@ class BusSynthApp {
       zoom: overview,
       routes: states,
       trains,
+      ferries,
       traffic,
       city: {
         total,
@@ -408,8 +431,53 @@ class BusSynthApp {
     });
   }
 
+  // Docking: a ferry within 150 m of a wharf and (nearly) stopped. It has to get 400 m away before it can dock again,
+  // so bobbing at the wharf doesn't retrigger. Positions are the map's lagged ones, so this lines up with the picture.
+  detectDocking(ferries) {
+    for (const f of ferries) {
+      let best = null;
+      for (const [lat, lon, name] of this.wharves) {
+        const d = Utils.calculateDistance(f.lat, f.lon, lat, lon);
+        if (!best || d < best.d) best = { d, lat, lon, name };
+      }
+      if (!best) continue;
+      if (!this.docked.has(f.id) && best.d < 150 && (f.kmh == null || f.kmh < 5)) {
+        this.docked.add(f.id);
+        this.arrivalTimes.push(Date.now());
+        this.mapManager.pulseAt(best.lat, best.lon, { kind: 'ferry', color: FERRY_COLOR, duration: 3200 });
+        this.addArrivalEvent(f.route, best.name, 0);
+        if (this.isAudioStarted) this.audio.ferryArrival({ id: f.id, route: f.route, lat: best.lat, lon: best.lon });
+      } else if (this.docked.has(f.id) && best.d > 400) {
+        this.docked.delete(f.id);
+      }
+    }
+  }
+
+  // Hover tooltip: route chip, kind and note; then lateness, speed and how full it is (whatever the feed knows)
+  describe(id, route) {
+    const type = Utils.routeType(route);
+    const kind = { 2: 'Train', 4: 'Ferry' }[type] ?? 'Bus';
+    const delay = this.vehicleDelay.get(id);
+    const kmh = this.lastStatePositions.get(id)?.kmh;
+    const facts = [
+      delay != null && type !== 4 ? this.delayTag(delay) : '',
+      kmh != null ? `${Math.round(kmh)} km/h` : '',
+      OCCUPANCY[this.vehicleOccupancy.get(id)] ?? ''
+    ].filter(Boolean);
+    return `<div class="tip-head"><span class="chip" style="--c:${this.colorFor(route)}">${esc(route)}</span><b>${kind}</b><span class="tip-note">${this.audio.noteName(route)}</span></div>` +
+      (facts.length ? `<div class="tip-facts">${facts.join('<i>·</i>')}</div>` : '') +
+      `<div class="tip-hint">${this.mapManager.following === id ? 'Following' : 'Click to follow'}</div>`;
+  }
+
+  showFollowing(id, route) {
+    this.followPill.hidden = !id;
+    if (id) this.followPill.querySelector('span').innerHTML = `Following <span class="chip" style="--c:${this.colorFor(route)}">${esc(route)}</span>`;
+  }
+
   colorFor(route) {
-    if (Utils.routeType(route) === 2) return LINE_COLORS[route] || '#fbbf24';
+    const type = Utils.routeType(route);
+    if (type === 2) return LINE_COLORS[route] || '#fbbf24';
+    if (type === 4) return FERRY_COLOR;
     const semis = Math.round(12 * Math.log2(routePitch(route, this.modes.pitch) / 73.42));
     return NOTE_COLORS[((semis % 12) + 12) % 12] || '#5eead4';
   }
@@ -425,12 +493,16 @@ class BusSynthApp {
   }
 
   updateCounts() {
-    let buses = 0, trains = 0;
+    let buses = 0, trains = 0, ferries = 0;
     this.routeBusData.forEach((list, route) => {
-      if (Utils.routeType(route) === 2) trains += list.length; else buses += list.length;
+      const type = Utils.routeType(route);
+      if (type === 2) trains += list.length; else if (type === 4) ferries += list.length; else buses += list.length;
     });
     this.countBuses.textContent = buses;
     this.countTrains.textContent = trains;
+    this.countFerries.textContent = ferries;
+    this.countFerries.parentElement.hidden = !ferries;
+    this.countFerries.nextSibling.textContent = ferries === 1 ? ' ferry' : ' ferries';
     this.routesCount.textContent = this.routeBusData.size;
   }
 
@@ -443,8 +515,8 @@ class BusSynthApp {
     }
     const max = routes[0][1].length;
     this.activeRoutesDisplay.innerHTML = routes.map(([route, list]) => {
-      const train = Utils.routeType(route) === 2;
-      const what = train ? (list.length > 1 ? 'trains' : 'train') : (list.length > 1 ? 'buses' : 'bus');
+      const kind = { 2: 'train', 4: 'ferry' }[Utils.routeType(route)];
+      const what = kind ? kind + (list.length > 1 ? 's' : '') : (list.length > 1 ? 'buses' : 'bus');
       return `<div class="row" style="--c:${this.colorFor(route)}">
         <span class="chip">${esc(route)}</span>
         <span class="main"><span class="sub">${list.length} ${what} · ${this.audio.noteName(route)}</span><span class="bar" style="--w:${(list.length / max).toFixed(3)}"></span></span>

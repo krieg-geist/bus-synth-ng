@@ -55,6 +55,20 @@ function newArrivals(updates, seen, nowMs) {
     return out;
 }
 
+// Ferries report AIS-style vessel ids (9 digits, New Zealand prefix 512) and no route or trip; they run the ferry route
+const isVessel = id => /^512\d{6}$/.test(String(id));
+let ferryName = null;
+
+// Route name for a GTFS-RT vehicle position (entity.vehicle)
+function vehicleRoute(vehicle) {
+    const routeId = vehicle?.trip?.route_id;
+    if (routeId == null && isVessel(vehicle?.vehicle?.id)) {
+        ferryName ??= Object.values(window.ROUTE_META || {}).find(m => m.type === 4)?.name ?? 'Ferry';
+        return ferryName;
+    }
+    return routeName(routeId);
+}
+
 let typeByName = null;
 // GTFS route_type for a route name (2 rail, 3 bus, 4 ferry, 5 cable car, 712 school)
 function routeType(name) {
@@ -90,6 +104,7 @@ function spatial(lat, lon, listener, rankPan) {
 window.Utils = {
     calculateDistance,
     routeName,
+    vehicleRoute,
     routeType,
     newArrivals,
     spatial,

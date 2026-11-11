@@ -1,6 +1,6 @@
 # Metlink Synth
 
-Wellington's buses and trains, live, played as music. Every busy bus route hums its own note and plucks one at each stop; trains whine, clack and buzz into stations. Late routes go sour, routes sharing a road bend each other's sound, and a vehicle turning around at the end of its route glitches. Zoom the map in to listen closer.
+Wellington's buses, trains and ferries, live, played as music. Every busy bus route hums its own note and plucks one at each stop; trains whine, clack and buzz into stations; ferries glop. Late routes go sour, routes sharing a road bend each other's sound, and a vehicle turning around at the end of its route glitches. Zoom the map in to listen closer.
 
 ## Quick Start
 
@@ -39,14 +39,16 @@ The API key is passed at runtime; `.env` files are never copied into the image.
 
 ### Sound (`frontend/js/route-synth.js`, plain Web Audio)
 - **Buses** (school buses included): a smooth drone per busy route, louder with more buses, and a soft pluck at each stop arrival. Arrivals play when they happened, in sync with the map's 60 s lag.
-- **Trains**: per train, a motor whine that climbs the scale as it speeds up, crunchy rail-joint clacks at its real speed (zoomed in), and a low buzz at stations. The Wairarapa diesel rumbles. Ferries and the cable car don't report realtime positions, so they're silent.
+- **Trains**: per train, a motor whine that climbs the scale as it speeds up, crunchy rail-joint clacks at its real speed and a rail roar (both when zoomed in near it), and a low buzz at stations. The Wairarapa diesel rumbles.
+- **Ferries**: they report as AIS-style vessel ids (9 digits starting 512) with no route, and are matched to the ferry route. Each boat is a low hull tone with watery vibrato through a swept band-pass, plus bubbles; docking at a wharf (from the timetable's ferry stops) drops big gloops and smears the boat through the granular bus. The cable car doesn't report, so it's silent.
 - **Modulation**: routes sharing road right now cross-modulate; late routes go flat and rough, early ones bright; speed sets brightness and pulse; bunching thickens the drone.
 - **Space**: you listen from the map centre. The crosshair ring is where sound drops to half; zoomed right out you hear the whole region. Zoomed in, a traffic bed (idling rumble, tyre noise) appears and the mix opens up.
-- **FX**: one reverb every source sends into by distance, and a granular glitch bus (`granular-worklet.js`) that only fires when a vehicle turns around at the end of its route.
+- **FX**: one reverb every source sends into by distance, and a granular glitch bus (`granular-worklet.js`) that fires when a vehicle turns around at the end of its route or a ferry docks.
+- **Two time scales**: where the camera is (level, pan, reverb send, tone) follows within about a third of a second, updated continuously while you pan; the data (bus counts, delays, speed) glides over seconds so it doesn't pulse with the 10 s feed. Voices go to the routes busiest near you.
 - **Controls**: *Length / Area* picks the pitch map (longer route = lower, or one chord tone per area, all on D pentatonic); *All / Top 8* picks which routes drone.
 
 ### Map
-Full-screen map on an [OpenFreeMap](https://openfreemap.org) dark basemap (free, no key; drawn by MapLibre inside Leaflet). Buses are bars in their note colour, trains three linked carriages in their line colour that bend along the track. Trails show about the last 7 minutes. An arrival ripples out from its stop: shape = the route's area (circle city, hexagon Hutt, triangle Porirua-Kāpiti, square rail), ragged and red when late, imploding when early. Bad GPS (outside the region, or impossible jumps) is filtered; vehicles that go quiet for a while just continue. The Info tab opens routes, arrivals and late running.
+Full-screen map on an [OpenFreeMap](https://openfreemap.org) dark basemap (free, no key; drawn by MapLibre inside Leaflet). Buses are bars in their note colour, trains three linked carriages in their line colour that bend along the track. Trails show about the last 7 minutes. An arrival ripples out from its stop: shape = the route's area (circle city, hexagon Hutt, triangle Porirua-Kāpiti, square rail), ragged and red when late, imploding when early. Bad GPS (outside the region, or impossible jumps) is filtered; vehicles that go quiet for a while just continue. Hover a vehicle for its route, note, lateness, speed and load; click it to fly in and follow it (any pan or zoom lets go). The Info tab opens routes, arrivals and late running.
 
 ### Route data
 Route names, types and lengths come from `frontend/js/route-meta.js`. Regenerate it when Metlink publishes a new timetable:

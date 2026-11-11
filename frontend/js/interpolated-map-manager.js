@@ -1,9 +1,12 @@
 const MAP_CONSTANTS = SHARED_CONSTANTS.MAP;
 
 class InterpolatedMapManager {
-  constructor(containerId, { colorFor } = {}) {
+  constructor(containerId, { colorFor, describe, onFollow } = {}) {
     this.containerId = containerId;
     this.colorFor = colorFor; // route -> colour; see BusSynthApp.colorFor
+    this.describe = describe; // (vehicle id, route) -> tooltip HTML
+    this.onFollow = onFollow; // (vehicle id or null, route) when following starts or stops
+    this.following = null; // vehicle id the camera is following
     this.map = null;
     this.busMarkers = new Map();
     this.canvasStopsLayer = null; // Canvas-based stop rendering
@@ -49,12 +52,19 @@ class InterpolatedMapManager {
         shapes = `<g transform="rotate(${rotation - bend / 2})">${body(-half, false)}` +
           `<g transform="rotate(${bend / 2} 0 ${-half - gap / 2})">${body(-half - gap - car, true)}</g>` +
           `<g transform="rotate(${-bend / 2} 0 ${half + gap / 2})">${body(half + gap, false)}</g></g>`;
+      } else if (type === 4) {
+        // Ferry: a hull with a pointed bow and a light cabin
+        const fw = 10 * s, fl = 22 * s;
+        size = Math.ceil(fl + 2);
+        shapes = `<g transform="rotate(${rotation})"><path d="M0 ${-fl / 2} C ${fw / 2} ${-fl / 4} ${fw / 2} ${fl / 4} ${fw * 0.4} ${fl / 2} ` +
+          `L ${-fw * 0.4} ${fl / 2} C ${-fw / 2} ${fl / 4} ${-fw / 2} ${-fl / 4} 0 ${-fl / 2} Z" fill="${color}" stroke="rgba(5,8,12,.85)" stroke-width="1"/>` +
+          `<rect x="${-fw * 0.22}" y="${-fl * 0.04}" width="${fw * 0.44}" height="${fl * 0.3}" rx="${1.2 * s}" fill="rgba(255,255,255,.6)"/></g>`;
       } else {
         size = Math.ceil(car + 2);
         shapes = `<g transform="rotate(${rotation})">${body(-car / 2, true)}</g>`;
       }
       const html = `<svg width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}">${shapes}</svg>`;
-      return L.divIcon({ html, className: type === 2 ? 'vehicle-marker train' : 'vehicle-marker', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+      return L.divIcon({ html, className: ['vehicle-marker', { 2: 'train', 4: 'ferry' }[type]].join(' '), iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
     };
 
   }
@@ -75,7 +85,15 @@ class InterpolatedMapManager {
       zoomSnap: 0.25, // the vector basemap renders fractional zoom cleanly, so the initial fit can be tight
       attributionControl: true
     });
-    L.control.zoom({ position: 'bottomright' }).addTo(this.map);
+    this.zoomControl = L.control.zoom({ position: 'bottomright' }).addTo(this.map);
+    // Following a vehicle (click it) ends on any camera move by the user: drag, wheel, pinch, double-click, keys, buttons
+    const stop = () => this.unfollow();
+    this.map.on('dragstart dblclick', stop);
+    const el = this.map.getContainer();
+    el.addEventListener('wheel', stop, { passive: true });
+    el.addEventListener('touchstart', e => { if (e.touches.length > 1) stop(); }, { passive: true });
+    el.addEventListener('keydown', stop);
+    this.zoomControl.getContainer().addEventListener('click', stop);
     this.map.fitBounds([[bounds[0][0], bounds[1][0]], [bounds[0][1], bounds[1][1]]], { padding: [20, 20] });
 
     // Basemap: OpenFreeMap vector tiles (free, no key) drawn by MapLibre inside Leaflet.
@@ -180,6 +198,7 @@ class InterpolatedMapManager {
       this.currentTime = now;
       this.lastAnimationTime = now;
       this.updateInterpolatedPositions();
+      this.trackFollowed();
       this.canvasTrailsLayer?.redraw();
       this.cleanupOldHistory();
 
@@ -216,7 +235,7 @@ class InterpolatedMapManager {
         lat: v.position.latitude,
         lon: v.position.longitude,
         bearing: v.position.bearing || 0,
-        routeId: this.cleanRouteId(v.trip?.route_id),
+        routeId: Utils.vehicleRoute(v),
         timestamp: received,
         reported: (v.timestamp || 0) * 1000 // the vehicle's own report time
       });
@@ -317,6 +336,7 @@ class InterpolatedMapManager {
       if (markerData.iconKey !== key) {
         markerData.iconKey = key;
         markerData.marker.setIcon(this.vehicleIcon(color, position.bearing, type, zoom, bend));
+        if (busId === this.following) markerData.marker.getElement()?.classList.add('following'); // new icon, new element
       }
 
       // Add to map if not visible
@@ -331,15 +351,15 @@ class InterpolatedMapManager {
 
       // Custom tooltip with timeout
       let tooltipTimeout = null;
-      const displayRouteId = position.routeId; // Route ID is already cleaned upstream
 
       const tooltip = L.tooltip({
         permanent: false,
         direction: 'top',
         className: 'bus-tooltip'
-      }).setContent(`${type === 2 ? 'Train' : 'Bus'} ${busId} · route ${displayRouteId}`);
+      });
 
       marker.bindTooltip(tooltip);
+      marker.on('click', () => this.follow(busId));
 
       // Add hover events for auto-hide tooltip
       marker.on('mouseover', () => {
@@ -347,6 +367,7 @@ class InterpolatedMapManager {
           clearTimeout(tooltipTimeout);
           tooltipTimeout = null;
         }
+        tooltip.setContent(this.describe(busId, this.latestRoute(busId)));
         marker.openTooltip();
       });
 
@@ -373,7 +394,7 @@ class InterpolatedMapManager {
     let start = Math.max(0, end - this.trailLength);
     for (let i = end - 1; i > start; i--) if (history[i].jump) { start = i; break; }
     const route = history[0].routeId;
-    const width = Utils.routeType(route) === 2 ? 2.6 : 1.8;
+    const width = { 2: 2.6, 4: 3.4 }[Utils.routeType(route)] ?? 1.8; // trains and ferries' wakes are wider
     this.canvasTrailsLayer.setTrail(busId, history, start, end, this.getRouteColor(route), width, this.currentInterpolatedPositions.get(busId));
   }
 
@@ -433,6 +454,39 @@ class InterpolatedMapManager {
     return 0;
   }
 
+  latestRoute(busId) {
+    return this.busPositionHistory.get(busId)?.at(-1)?.routeId;
+  }
+
+  // Click a vehicle: fly to street level and keep it centred every frame. The listener sits at the map centre,
+  // so the followed vehicle is also the loudest thing in the mix.
+  follow(busId) {
+    const pos = this.currentInterpolatedPositions.get(busId);
+    if (!pos) return;
+    this.setFollowing(busId);
+    this.flying = true;
+    this.map.once('moveend', () => { this.flying = false; });
+    this.map.flyTo([pos.lat, pos.lon], Math.max(this.map.getZoom(), 16), { duration: 1.2 });
+  }
+
+  unfollow() {
+    if (this.following) this.setFollowing(null);
+  }
+
+  setFollowing(busId) {
+    this.busMarkers.get(this.following)?.marker.getElement()?.classList.remove('following');
+    this.following = busId;
+    this.busMarkers.get(busId)?.marker.getElement()?.classList.add('following');
+    this.onFollow?.(busId, busId && this.latestRoute(busId));
+  }
+
+  trackFollowed() {
+    if (!this.following || this.flying) return;
+    const pos = this.currentInterpolatedPositions.get(this.following);
+    if (!pos) return this.unfollow();
+    this.map.setView([pos.lat, pos.lon], this.map.getZoom(), { animate: false });
+  }
+
   animateStopPulse(stopId, size = 1, color) {
     this.canvasStopsLayer?.animateStopPulse(stopId, size, color);
   }
@@ -467,6 +521,7 @@ class InterpolatedMapManager {
     });
   }
   removeBus(busId) {
+    if (this.following === busId) this.unfollow();
     // Remove marker
     if (this.busMarkers.has(busId)) {
       const markerData = this.busMarkers.get(busId);
@@ -600,9 +655,6 @@ class InterpolatedMapManager {
     this.currentInterpolatedPositions.clear();
   }
 
-  cleanRouteId(routeId) {
-    return Utils.routeName(routeId);
-  }
 }
 
 window.InterpolatedMapManager = InterpolatedMapManager;

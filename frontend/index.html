@@ -36,11 +36,17 @@
 
     <h1 class="brand">Metlink Synth</h1>
 
+    <div class="follow-pill glass" id="follow-pill" hidden>
+        <span></span>
+        <button id="follow-stop" aria-label="Stop following">×</button>
+    </div>
+
     <div class="status glass">
         <span class="dot" id="connection-dot" title="Connecting"></span>
         <span class="sr-only" id="connection-status">Connecting</span>
         <span class="stat"><b class="mono" id="count-buses">–</b> buses</span>
         <span class="stat train"><b class="mono" id="count-trains">–</b> trains</span>
+        <span class="stat ferry" hidden><b class="mono" id="count-ferries">0</b> ferries</span>
     </div>
 
     <aside class="panel glass" id="panel" aria-label="Info">
@@ -49,14 +55,11 @@
             <span>Info</span>
         </button>
         <div class="panel-body" id="panel-body">
-            <div class="infobox" id="infobox">
-                <p>Wellington's buses and trains, live and 60 seconds behind, played as music. Every busy bus route hums its own note and plucks one at each stop; trains whine, clack and buzz into stations. Late routes go sour, routes sharing a road bend each other's sound, and a vehicle turning around at the end of its route glitches. Zoom in to listen closer: the ring is how far you hear.</p>
-                <button class="infobox-close" id="infobox-close" aria-label="Dismiss">×</button>
-            </div>
 
             <div class="legend">
                 <span class="key"><i class="swatch swatch-bus"></i>Bus · colour = note</span>
                 <span class="key"><i class="swatch swatch-train"></i>Train · colour = line</span>
+                <span class="key"><i class="swatch swatch-ferry"></i>Ferry</span>
                 <span class="key"><i class="swatch swatch-arrival"></i>Arrival · shape = area, ragged = late</span>
                 <span class="key"><i class="swatch swatch-turn"></i>Turnaround</span>
             </div>
@@ -75,10 +78,67 @@
             <footer class="links">
                 <a href="https://github.com/krieg-geist/bus-synth-ng" target="_blank" rel="noopener noreferrer">Source</a>
                 <a href="https://instagram.com/delusions_of_adequacy" target="_blank" rel="noopener noreferrer">Instagram</a>
+                <button id="about-btn" class="link-btn">How it works</button>
                 <button id="clear-events" class="link-btn">Clear lists</button>
             </footer>
         </div>
     </aside>
+
+    <dialog class="intro" id="intro" aria-labelledby="intro-title">
+        <h2 id="intro-title">Metlink Synth</h2>
+        <p class="lede">Wellington's buses and trains, as a generative ambient synth.</p>
+
+        <section>
+            <i class="swatch swatch-bus" aria-hidden="true"></i>
+            <div>
+                <h3>Buses hum</h3>
+                <p>Every busy route is a drone: two detuned <span class="tech">saws</span> through a <span class="tech">lowpass</span>, on its own note of a <span class="tech">just-intoned D pentatonic</span> (longer route, lower note). Each stop arrival plucks a little <span class="tech">2-op FM</span> note at the moment it happened. The site runs 60 seconds behind live. This is so we can buffer and smooth events and also because metlink is never on time.</p>
+            </div>
+        </section>
+        <section>
+            <i class="swatch swatch-train" aria-hidden="true"></i>
+            <div>
+                <h3>Trains sing</h3>
+                <p>Each train gets an <span class="tech">inverter whine</span> that climbs the scale as it speeds up, <span class="tech">bit-crushed</span> clacks at its movement rate, and a low buzz as it pulls into a station.</p>
+            </div>
+        </section>
+        <section>
+            <i class="swatch swatch-ferry" aria-hidden="true"></i>
+            <div>
+                <h3>Ferries glop</h3>
+                <p>Each boat is a low tone with slightly seasick <span class="tech">vibrato</span>, pushed through a <span class="tech">band-pass</span> an LFO sloshes up and down. Docking lets the <span class="tech">granular</span> effect bark.</p>
+            </div>
+        </section>
+        <section>
+            <i class="glyph-wave" aria-hidden="true"></i>
+            <div>
+                <h3>Everything modulates everything</h3>
+                <p>Routes sharing a road <span class="tech">FM</span> each other. Late routes drift flat and <span class="tech">beat</span> against themselves; early ones go sharp and bright. Speed opens the <span class="tech">filter</span> and sets the <span class="tech">tremolo</span> rate, so a traffic jam goes dark and still.</p>
+            </div>
+        </section>
+        <section>
+            <i class="swatch swatch-turn" aria-hidden="true"></i>
+            <div>
+                <h3>Turnarounds glitch</h3>
+                <p>When a vehicle reaches the end of the line, a <span class="tech">granular AudioWorklet</span> grabs it and rewinds it into reversed, stuttering grains. The later the city is running, the more it <span class="tech">feeds back</span>.</p>
+            </div>
+        </section>
+        <section>
+            <i class="swatch swatch-arrival" aria-hidden="true"></i>
+            <div>
+                <h3>You are the crosshair</h3>
+                <p>The ring is the half-point of the <span class="tech">distance rolloff</span>. Zoom in and the street gets close, dry and a bit grubby with a touch of <span class="tech">drive</span>. Zoom out and the whole region melts into <span class="tech">reverb</span>.</p>
+            </div>
+        </section>
+
+        <div class="intro-actions">
+            <button class="pill-primary" id="intro-listen">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+                Start listening
+            </button>
+        </div>
+        <p class="intro-foot">Live from Metlink Open Data, positions every ~10 s. Headphones recommended.</p>
+    </dialog>
 
     <div class="transport glass" role="toolbar" aria-label="Sound controls">
         <button id="audio-toggle-btn" class="play" aria-pressed="false">

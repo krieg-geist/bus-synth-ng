@@ -44,6 +44,11 @@ for (const r of ['1', '2', '110', '220', 'KPL', 'AX', 'CCL', 'WHF', 'N1', '737',
     assert.ok(D.includes(((semis % 12) + 12) % 12), `${r} ${mode}`);
   }
 }
+// Ferries report a 9-digit vessel id (NZ prefix 512) and no route: they run the ferry route
+assert.strictEqual(Utils.vehicleRoute({ vehicle: { id: 512003252 }, trip: { trip_id: null } }), 'WHF');
+assert.strictEqual(Utils.vehicleRoute({ vehicle: { id: '3439' }, trip: { route_id: 20 } }), '2');
+assert.strictEqual(Utils.routeType('WHF'), 4);
+
 // Route types: trains get their own voice
 assert.strictEqual(Utils.routeType('KPL'), 2);
 assert.strictEqual(Utils.routeType('2'), 3);

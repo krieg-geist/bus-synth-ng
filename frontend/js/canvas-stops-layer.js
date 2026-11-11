@@ -1,6 +1,7 @@
 // Canvas layer for stops and events. Idle stops are faint dots that recede into the map; events are ripples:
 // an arrival is a ring in the route's colour whose shape is the route's area (circle, hexagon, triangle, square);
-// late arrivals break up, wobble, redden and linger, early ones implode. A turnaround is a broken square that jitters.
+// late arrivals break up, wobble, redden and linger, early ones implode. A turnaround is a broken square that jitters;
+// a docking ferry sends out slow water rings.
 class CanvasStopsLayer extends L.Layer {
   constructor(stops, options = {}) {
     super();
@@ -110,6 +111,18 @@ class CanvasStopsLayer extends L.Layer {
       const ease = 1 - (1 - t) ** 3;
       ctx.strokeStyle = rp.color;
       ctx.fillStyle = rp.color;
+      if (rp.kind === 'ferry') {
+        // Ferry docking: three slow water rings, a little wobbly, one after another
+        ctx.lineWidth = 1.6 * Math.min(scale, 1.3);
+        for (let k = 0; k < 3; k++) {
+          const tk = t - k * 0.18;
+          if (tk <= 0) continue;
+          ctx.globalAlpha = Math.max(0, 1 - tk) * 0.85;
+          this.shape(p.x, p.y, (5 + 36 * (1 - (1 - tk) ** 2)) * scale, 0, 0, 0.05, rp.seed + tk * 6 + k);
+          ctx.stroke();
+        }
+        continue;
+      }
       if (rp.kind === 'turnaround') {
         // Broken square that jitters and grows: the glitch bus is replaying this route
         const s = (6 + rp.size * 18 * ease) * scale;
