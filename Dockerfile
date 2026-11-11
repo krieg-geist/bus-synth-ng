@@ -1,29 +1,21 @@
-FROM node:22-alpine
+FROM node:24-alpine
 
-WORKDIR /app
-
-# Copy package files
-COPY backend/package*.json ./backend/
-
-# Install dependencies
+ENV NODE_ENV=production
 WORKDIR /app/backend
-RUN npm ci --only=production
 
-# Go back to app root to copy files
+# Dependencies first, so source changes don't reinstall them
+COPY backend/package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Same layout as the repo: server.js reads ../shared and serves ./public
 WORKDIR /app
-
-# Copy shared constants (maintains same relative structure as dev)
 COPY shared/ ./shared/
-
-# Copy backend source (maintains directory structure)
 COPY backend/ ./backend/
-
-# Copy frontend files to be served by Express (backend expects them in ./public relative to server.js)
 COPY frontend/ ./backend/public/
 
-# Expose ports for HTTP and WebSocket
-EXPOSE 3000 8765
-
-# Run from backend directory to maintain relative paths
 WORKDIR /app/backend
-CMD ["npm", "start"]
+USER node
+EXPOSE 3000 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD wget -qO /dev/null http://127.0.0.1:3000/ || exit 1
+# node directly (not npm start) so docker stop's SIGTERM reaches the server
+CMD ["node", "server.js"]

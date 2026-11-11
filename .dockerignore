@@ -1,10 +1,18 @@
+# Never bake secrets into the image: pass METLINK_API_KEY at runtime
+**/.env
+**/.env.*
+!**/.env.example
+
+**/node_modules
+**/npm-debug.log*
+**/*.log
 .git
 .gitignore
-README.md
+.dockerignore
+Dockerfile
 *.md
-node_modules
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+scripts/
+.claude/
+.serena/
 .DS_Store
 Thumbs.db

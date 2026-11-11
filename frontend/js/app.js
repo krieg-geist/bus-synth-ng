@@ -1,63 +1,64 @@
+// Colour = sound: a bus takes the colour of its note (D pentatonic degrees), a train the colour of its line
+const NOTE_COLORS = { 0: '#5eead4', 2: '#7dd3fc', 4: '#a5b4fc', 7: '#86efac', 9: '#d8b4fe' }; // D E F# A B
+const LINE_COLORS = { KPL: '#fbbf24', HVL: '#fb923c', MEL: '#fdba74', JVL: '#facc15', WRL: '#f87171' };
+const FERRY_COLOR = '#4f9dff';
+const OCCUPANCY = ['empty', 'many seats', 'few seats', 'standing room', 'packed', 'full']; // GTFS-RT occupancy_status
+const RIPPLE_SHAPES = { city: [0, 0], hutt: [6, 0], north: [3, -Math.PI / 2], rail: [4, Math.PI / 4], special: [4, 0] }; // [sides, rotation]
+const mixHex = (a, b, t) => '#' + [1, 3, 5].map(i =>
+  Math.round(parseInt(a.slice(i, i + 2), 16) * (1 - t) + parseInt(b.slice(i, i + 2), 16) * t).toString(16).padStart(2, '0')).join('');
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`); // API text into innerHTML
+
 class BusSynthApp {
   constructor() {
     this.wsClient = null;
-    this.audioManager = null;
+    this.audio = null;
     this.mapManager = null;
     this.isAudioStarted = false;
     this.bounds = null;
-    this.currentBuses = new Map();
     this.stops = [];
-    this.stopSpatialIndex = null; // Spatial index for efficient stop proximity queries
-    this.routeBusData = new Map(); // grouping buses by route
-    this.lastBusPositions = new Map(); // for detecting arrivals
-    this.recentArrivals = new Map(); // debounce arrivals: "busId-stopId" -> timestamp
-    this.stopDelays = new Map(); // store delay data: "stopId" -> {delay, routeId, timestamp}
-    this.stopProximityThreshold = SHARED_CONSTANTS.PROXIMITY.STOP_THRESHOLD_METERS;
+    this.stopsById = new Map();
+    this.sortedStopLons = []; // for rank-based panning
+    this.routeBusData = new Map(); // route -> lagged buses
+    this.routeStates = new Map(); // route -> { n, delay, kmh, bunched, lon }
+    this.seenStops = new Map(); // trip_id -> last stop_sequence played
+    this.vehicleTrip = new Map(); // vehicle id -> trip_id from positions, to spot turnarounds
+    this.docked = new Set(); // ferry ids currently at a wharf
+    this.wharves = Object.values(window.ROUTE_META || {}).filter(m => m.type === 4).flatMap(m => m.stops || []); // [lat, lon, name]
+    this.vehicleDelay = new Map(); // vehicle id -> signed delay (s)
+    this.vehicleOccupancy = new Map(); // vehicle id -> GTFS-RT occupancy_status
+    this.lastStatePositions = new Map(); // bus id -> { lat, lon, t, kmh } for speed
+    this.arrivalTimes = []; // recent arrival times, for the city arrival rate
+    this.listenerPos = null; // map view centre + radius: where you're listening from
 
     // UI elements
     this.audioToggleBtn = document.getElementById('audio-toggle-btn');
     this.volumeSlider = document.getElementById('volume-slider');
     this.volumeValue = document.getElementById('volume-value');
+    this.modes = { pitch: 'length', drone: 'emergent' };
     this.connectionStatus = document.getElementById('connection-status');
-    this.busCount = document.getElementById('bus-count');
+    this.connectionDot = document.getElementById('connection-dot');
     this.audioStatus = document.getElementById('audio-status');
-    
+    this.countBuses = document.getElementById('count-buses');
+    this.countTrains = document.getElementById('count-trains');
+    this.countFerries = document.getElementById('count-ferries');
+    this.followPill = document.getElementById('follow-pill');
+    this.routesCount = document.getElementById('routes-count');
+    this.arrivalsCount = document.getElementById('arrivals-count');
+    this.delaysCount = document.getElementById('delays-count');
+    this.reticle = document.getElementById('reticle');
+    this.listening = document.getElementById('listening');
+
     // Audio events display elements
     this.activeRoutesDisplay = document.getElementById('active-routes');
     this.recentArrivalsDisplay = document.getElementById('recent-arrivals');
     this.delayEventsDisplay = document.getElementById('delay-events');
     this.clearEventsBtn = document.getElementById('clear-events');
-    
-    // Audio events data
-    this.recentArrivalEvents = [];
-    this.recentDelayEvents = [];
-    this.maxEventHistory = 10;
+
+    this.maxEventHistory = 12;
 
     this.bindEvents();
-  }
-
-  cleanRouteId(routeId) {
-    if (!routeId) return routeId;
-    
-    // Handle both string and number route IDs
-    if (typeof routeId === 'number') {
-      // Remove trailing zero from numeric route IDs (Metlink convention)
-      if (routeId % 10 === 0) {
-        return routeId / 10;
-      }
-      return routeId;
-    }
-    
-    // Handle string route IDs (like trains)
-    if (typeof routeId === 'string') {
-      // Remove trailing zero from numeric strings
-      if (/^\d+0$/.test(routeId) && routeId.length > 1) {
-        return routeId.slice(0, -1);
-      }
-      return routeId;
-    }
-    
-    return routeId;
+    this.clearAudioEvents();
+    this.updateActiveRoutesDisplay();
   }
 
   bindEvents() {
@@ -66,29 +67,67 @@ class BusSynthApp {
     this.volumeSlider.addEventListener('input', (e) => {
       const volume = parseInt(e.target.value);
       this.volumeValue.textContent = `${volume}%`;
-      if (this.audioManager) {
-        this.audioManager.setMasterVolume(volume / 100);
+      if (this.audio) {
+        this.audio.setVolume(volume / 100);
       }
     });
-    
+
+    const checked = name => document.querySelector(`input[name="${name}"]:checked`).value;
+    document.querySelectorAll('input[name="pitch-mode"], input[name="drone-mode"]').forEach(input =>
+      input.addEventListener('change', () => {
+        this.modes = { pitch: checked('pitch-mode'), drone: checked('drone-mode') };
+        this.audio?.setModes(this.modes);
+        this.updateActiveRoutesDisplay();
+      }));
+
     this.clearEventsBtn.addEventListener('click', () => this.clearAudioEvents());
+    document.getElementById('follow-stop').addEventListener('click', () => this.mapManager?.unfollow());
+
+    const panel = document.getElementById('panel');
+    const toggle = document.getElementById('toggle-events');
+    const setOpen = open => {
+      panel.classList.toggle('collapsed', !open);
+      toggle.setAttribute('aria-expanded', open);
+      toggle.title = open ? 'Hide panel' : 'Show panel';
+      if (open) this.updateActiveRoutesDisplay();
+    };
+    toggle.addEventListener('click', () => setOpen(panel.classList.contains('collapsed')));
+    if (window.matchMedia('(max-width: 640px)').matches) setOpen(false); // phones: start with the map
+
+    // Intro popup on start. "Start listening" is also the click browsers need before audio may play.
+    const intro = document.getElementById('intro');
+    const showIntro = () => { intro.showModal(); intro.scrollTop = 0; }; // focus lands on the button; start at the top
+    showIntro();
+    document.getElementById('intro-listen').addEventListener('click', () => { intro.close(); this.startAudio(); });
+    intro.addEventListener('click', e => { // a click on the backdrop, outside the card, closes it
+      const r = intro.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) intro.close();
+    });
+    document.getElementById('about-btn').addEventListener('click', showIntro);
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(btn => btn.addEventListener('click', () => {
+      tabs.forEach(b => { b.classList.toggle('active', b === btn); b.setAttribute('aria-selected', b === btn); });
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `${btn.dataset.tab}-tab`));
+    }));
   }
 
   async initialize() {
     try {
       // Fetch initial data
-      this.updateStatus('Loading stops data...');
       const stopsResponse = await fetch('api/stops');
       if (!stopsResponse.ok) throw new Error('Failed to fetch stops');
 
       this.stops = await stopsResponse.json();
+      this.stopsById = new Map(this.stops.map(s => [s.stop_id, s]));
+      this.sortedStopLons = this.stops.map(s => s.stop_lon).sort((a, b) => a - b);
       this.calculateBounds();
 
-      // Initialize spatial index for efficient stop proximity queries
-      this.initializeSpatialIndex();
-
       // Initialize map
-      this.mapManager = new InterpolatedMapManager('map-container');
+      this.mapManager = new InterpolatedMapManager('map-container', {
+        colorFor: route => this.colorFor(route),
+        describe: (id, route) => this.describe(id, route),
+        onFollow: (id, route) => this.showFollowing(id, route)
+      });
       await this.mapManager.initialize(this.stops, this.bounds);
 
       // Handle window resize for map
@@ -98,8 +137,15 @@ class BusSynthApp {
         }
       });
 
-      // audio manager
-      this.audioManager = new RoutePulseAudioManager(this.bounds);
+      this.audio = new RouteSynth({ place: (lat, lon) => this.place(lat, lon) });
+      this.mapManager.map.on('moveend', () => this.updateRouteStates()); // re-place sound as soon as the view settles
+      // ...and keep re-placing it while the camera moves (about 8 times a second), not just when it stops
+      this.mapManager.map.on('move', () => {
+        this.moveTimer ??= setTimeout(() => { this.moveTimer = null; this.updateRouteStates(); }, 120);
+      });
+      this.mapManager.map.on('move zoom resize', () => this.updateReticle());
+      this.audio.setModes(this.modes);
+      this.updateReticle();
 
       // Initialize WebSocket
       this.wsClient = new WebSocketClient();
@@ -107,54 +153,46 @@ class BusSynthApp {
       this.wsClient.onStatusChange = (status) => this.updateConnectionStatus(status);
       this.wsClient.connect();
 
-      // Start cleanup interval for inactive routes
-      setInterval(() => {
-        if (this.audioManager) {
-          this.audioManager.cleanupInactiveRoutes();
-        }
-      }, SHARED_CONSTANTS.POLLING.ROUTE_CLEANUP_INTERVAL_MS);
+      // Route states follow the map's interpolated (lagged) positions, so sample them continuously
+      this.stateTimer = setInterval(() => this.updateRouteStates(), 2000);
 
-      console.log(`Initialized with ${this.stops.length} stops`);
-
-      // Don't auto-start audio - let user start manually
-      this.audioToggleBtn.textContent = 'Start Audio';
-      this.audioStatus.textContent = 'Stopped';
 
     } catch (error) {
       console.error('Initialization failed:', error);
-      this.updateStatus('Initialization failed');
     }
   }
+
+  // Initial view: Wellington, Porirua and the Hutt, where most service runs. Framing every stop reaches Masterton
+  // and leaves Wellington in a corner; at this zoom the whole region (Kāpiti, Wairarapa) is still heard.
   calculateBounds() {
-    if (this.stops.length === 0) return;
-
-    let minLat = Infinity, maxLat = -Infinity;
-    let minLon = Infinity, maxLon = -Infinity;
-
-    this.stops.forEach(stop => {
-      minLat = Math.min(minLat, stop.stop_lat);
-      maxLat = Math.max(maxLat, stop.stop_lat);
-      minLon = Math.min(minLon, stop.stop_lon);
-      maxLon = Math.max(maxLon, stop.stop_lon);
-    });
-
-    this.bounds = [[minLat, maxLat], [minLon, maxLon]];
-    console.log('Calculated bounds:', this.bounds);
+    this.bounds = [[-41.35, -41.05], [174.72, 175.08]];
   }
 
-  initializeSpatialIndex() {
-    if (!this.bounds || this.stops.length === 0) return;
+  // Pan by a longitude's rank among all stops, not its raw value: the region stretches east to
+  // Masterton, so linear mapping pushed ~95% of activity hard left.
+  panFor(lon) {
+    const a = this.sortedStopLons;
+    if (lon == null || a.length === 0) return 0;
+    let lo = 0, hi = a.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (a[mid] < lon) lo = mid + 1; else hi = mid;
+    }
+    return (lo / a.length) * 2 - 1;
+  }
 
-    // Create spatial index with configurable grid size
-    this.stopSpatialIndex = new SpatialIndex(this.bounds, SHARED_CONSTANTS.PROXIMITY.GRID_SIZE);
-    
-    // Index all stops
-    this.stops.forEach(stop => {
-      this.stopSpatialIndex.addItem(stop.stop_lat, stop.stop_lon, stop);
-    });
-    
-    const stats = this.stopSpatialIndex.getStats();
-    console.log(`Stop spatial index created: ${stats.totalItems} stops, ${stats.avgItemsPerCell} avg per cell, ${stats.cellSize.approxMeters} cell size`);
+  // The listener sits at the map view centre. Sound is at half strength at the crosshair ring, whose diameter is the
+  // screen's shorter side (full height on a desktop); radius (view half-diagonal) sets how zoomed out the view is.
+  listener() {
+    const map = this.mapManager?.map;
+    if (!map) return { lat: -41.28, lon: 174.78, radius: 40000, hear: 16000 };
+    const c = map.getCenter(), ne = map.getBounds().getNorthEast(), size = map.getSize();
+    const radius = Utils.calculateDistance(c.lat, c.lng, ne.lat, ne.lng);
+    return { lat: c.lat, lon: c.lng, radius, hear: radius * Math.min(size.x, size.y) / Math.hypot(size.x, size.y) };
+  }
+
+  place(lat, lon) {
+    return Utils.spatial(lat, lon, this.listenerPos || this.listener(), this.panFor(lon));
   }
 
   toggleAudio() {
@@ -169,534 +207,385 @@ class BusSynthApp {
     if (this.isAudioStarted) return;
 
     try {
-      this.updateStatus('Starting audio...');
-      const success = await this.audioManager.initialize();
-
-      if (success) {
-        this.isAudioStarted = true;
-        this.audioToggleBtn.textContent = 'Stop Audio';
-        this.audioStatus.textContent = 'Running';
-        this.updateStatus('Audio started');
-
-        // Resume any existing routes
-        this.audioManager.resumeAllAudio();
-      } else {
-        throw new Error('Audio initialization failed');
-      }
+      await this.audio.start(this.volumeSlider.value / 100);
+      this.isAudioStarted = true;
+      this.setPlaying(true);
+      this.updateRouteStates();
     } catch (error) {
       console.error('Start audio failed:', error);
-      this.audioToggleBtn.textContent = 'Start Audio';
-      this.audioStatus.textContent = 'Failed';
-      this.updateStatus('Audio start failed');
+      this.setPlaying(false);
     }
   }
 
   stopAudio() {
     if (!this.isAudioStarted) return;
 
-    this.audioManager.stopAllAudio();
+    this.audio.stop();
     this.isAudioStarted = false;
-    this.audioToggleBtn.textContent = 'Start Audio';
-    this.audioStatus.textContent = 'Stopped';
-    this.updateStatus('Audio stopped');
+    this.setPlaying(false);
+  }
+
+  setPlaying(playing) {
+    this.audioToggleBtn.setAttribute('aria-pressed', playing);
+    this.audioStatus.textContent = playing ? 'Stop' : 'Listen';
   }
 
   handleWebSocketMessage(data) {
     if (data.type === 'bus_update') {
-      // Handle both historical and real-time data, pass isHistorical flag
       this.processBusUpdate(data.buses, data.isHistorical);
-      this.processDelayUpdates(data.updates);
-      
-      // Log differently for historical vs real-time data
-      if (data.isHistorical) {
-        console.log(`Processed historical data: ${data.buses.length} buses at ${new Date(data.timestamp).toLocaleTimeString()}`);
-      }
+      this.processTripUpdates(data.updates);
     }
   }
+
   processBusUpdate(buses, isHistorical = false) {
-    // Update interpolated map with buses, passing historical flag
     this.mapManager.updateBuses(buses, isHistorical);
-    
-    // Only process audio and stop detection for real-time data
-    if (!isHistorical) {
-      // Get lagged/interpolated positions for synchronized audio and stop detection
-      const laggedRouteData = this.mapManager.getCurrentLaggedRouteData();
-      const laggedPositions = this.mapManager.getCurrentLaggedPositions();
-      
-      // Convert lagged positions to bus format for stop detection
-      const laggedBuses = Array.from(laggedPositions.entries()).map(([busId, pos]) => ({
-        vehicle: {
-          vehicle: { id: busId },
-          position: {
-            latitude: pos.lat,
-            longitude: pos.lon,
-            bearing: pos.bearing
-          },
-          trip: { route_id: pos.routeId }
-        }
-      }));
-      
-      // Detect stop arrivals using lagged positions
-      this.detectStopArrivals(laggedBuses);
-      
-      if (this.isAudioStarted && laggedRouteData.size > 0) {
-        laggedRouteData.forEach((buses, routeId) => {
-          this.audioManager.updateRoute(routeId, buses);
-        });
-        
-        // Stop audio for routes with no buses in lagged data
-        this.routeBusData.forEach((_, routeId) => {
-          if (!laggedRouteData.has(routeId)) {
-            this.audioManager.updateRoute(routeId, []);
-          }
-        });
-      }
-      
-      // Store current route data
-      this.routeBusData = laggedRouteData;
-      
-      // Update UI with lagged bus count
-      const totalLaggedBuses = Array.from(laggedRouteData.values()).reduce((sum, buses) => sum + buses.length, 0);
-      this.busCount.textContent = `${totalLaggedBuses} buses, ${laggedRouteData.size} routes`;
-      
-      // Update active routes display
-      this.updateActiveRoutesDisplay();
-      
-      console.log(`Synchronized update: ${laggedRouteData.size} routes, ${totalLaggedBuses} lagged buses`);
-    }
-  }
 
-  processDelayUpdates(updates) {
-    if (!updates || updates.length === 0) return;
-
-    const currentTime = Date.now() / 1000;
-    let newDelayRecords = 0;
-
-    updates.forEach(update => {
-      if (!update.trip_update || !update.trip_update.stop_time_update) return;
-
-      const tripUpdate = update.trip_update;
-      const stopTimeUpdate = tripUpdate.stop_time_update;
-      const arrival = stopTimeUpdate.arrival;
-
-      if (!arrival || !arrival.delay || !stopTimeUpdate.stop_id) return;
-
-      const delay = Math.abs(arrival.delay);
-      const stopId = stopTimeUpdate.stop_id;
-      const timestamp = arrival.time || currentTime;
-      const rawRouteId = tripUpdate.trip?.route_id;
-      const routeId = this.cleanRouteId(rawRouteId);
-
-      // Store delay data for arrival blasts (adapted from Python implementation)
-      if (stopId && delay > 10 && routeId) {
-        this.stopDelays.set(stopId, {
-          delay: delay,
-          routeId: routeId, // Store cleaned route ID
-          timestamp: timestamp,
-          recordedAt: currentTime
-        });
-        newDelayRecords++;
-      }
-
-      // Only process future delays for route disruptions
-      if (timestamp > currentTime && delay > 10 && routeId && this.isAudioStarted) {
-        const stop = this.stops.find(s => s.stop_id === stopId);
-        if (stop) {
-          const triggerTime = (timestamp - currentTime) * 1000;
-
-          setTimeout(() => {
-            // Trigger route-specific delay disruption
-            this.audioManager.triggerDelayEvent(routeId, delay, stop.stop_lat, stop.stop_lon);
-            
-            // Add to delay events display
-            this.addDelayEvent(routeId, delay, stopId);
-          }, triggerTime);
-
-          console.log(`Scheduled delay disruption for route ${routeId} at stop ${stopId} in ${triggerTime / 1000}s (${delay}s delay)`);
-        }
-      }
-    });
-
-    if (newDelayRecords > 0) {
-      console.log(`Stored ${newDelayRecords} delay records for arrival blasts. Total: ${this.stopDelays.size}`);
-    }
-
-    // Cleanup old delay records (older than 1 hour)
-    if (Math.random() < 0.1) { // 10% chance to cleanup
-      this.cleanupOldDelayRecords(currentTime);
-    }
-  }
-
-  detectStopArrivals(buses) {
-    if (!this.mapManager.animateStopPulse || !this.stopSpatialIndex) return; // Safety check
-
-    const now = Date.now();
-
+    const lag = SHARED_CONSTANTS.MAP.TIMING.DISPLAY_LAG_MS;
     buses.forEach(bus => {
-      if (!bus.vehicle || !bus.vehicle.position) return;
+      const v = bus.vehicle;
+      const id = v?.vehicle?.id;
+      if (!id) return;
+      if (v.occupancy_status != null) this.vehicleOccupancy.set(id, v.occupancy_status);
+      // Turnaround: the feed assigns the vehicle its next trip at the terminus (~2-5 a minute city-wide).
+      // Played after the map's display lag, where the vehicle is on screen.
+      const trip = v.trip?.trip_id;
+      const prev = this.vehicleTrip.get(id);
+      if (trip) this.vehicleTrip.set(id, trip);
+      if (!isHistorical && prev && trip && prev !== trip && this.mapManager.validPosition(bus)) {
+        const ev = { route: Utils.routeName(v.trip.route_id), lat: v.position.latitude, lon: v.position.longitude };
+        setTimeout(() => {
+          this.mapManager.pulseAt(ev.lat, ev.lon, { color: this.colorFor(ev.route), kind: 'turnaround', duration: 2400 });
+          if (this.isAudioStarted) this.audio.turnaround(ev);
+        }, lag);
+      }
+    });
 
-      const busId = bus.vehicle.vehicle.id;
-      const currentPos = bus.vehicle.position;
-      const lastPos = this.lastBusPositions.get(busId);
+    if (isHistorical) return;
 
-      // Store current position for next comparison
-      this.lastBusPositions.set(busId, {
-        lat: currentPos.latitude,
-        lon: currentPos.longitude,
-        timestamp: now
-      });
+    this.routeBusData = this.mapManager.getCurrentLaggedRouteData();
+    this.updateCounts();
+    this.updateActiveRoutesDisplay();
+  }
 
-      if (!lastPos) return; // Skip first position
+  // Each newly confirmed stop arrival is replayed at its real time plus the map's display lag,
+  // so the note, the stop pulse and the bus on the map line up.
+  processTripUpdates(updates) {
+    const now = Date.now();
+    const lag = SHARED_CONSTANTS.MAP.TIMING.DISPLAY_LAG_MS;
 
-      // Use spatial index to get only nearby stops (much more efficient!)
-      const nearbyStops = this.stopSpatialIndex.getItemsInRadius(
-        currentPos.latitude, 
-        currentPos.longitude, 
-        this.stopProximityThreshold * SHARED_CONSTANTS.PROXIMITY.SEARCH_RADIUS_MULTIPLIER
-      );
+    (updates || []).forEach(u => {
+      const vid = u.trip_update?.vehicle?.id;
+      const delay = u.trip_update?.stop_time_update?.arrival?.delay;
+      if (vid && delay != null) this.vehicleDelay.set(vid, delay);
+    });
 
-      // Check only the nearby stops instead of all 2000+ stops
-      nearbyStops.forEach(stop => {
-        const distanceToStop = Utils.calculateDistance(
-          currentPos.latitude,
-          currentPos.longitude,
-          stop.stop_lat,
-          stop.stop_lon
-        );
+    Utils.newArrivals(updates, this.seenStops, now).forEach(a => {
+      const playIn = a.time + lag - now;
+      if (playIn < -5000) return; // reported too late to line up with the map (~2% of arrivals)
 
-        const lastDistanceToStop = lastPos ? Utils.calculateDistance(
-          lastPos.lat,
-          lastPos.lon,
-          stop.stop_lat,
-          stop.stop_lon
-        ) : Infinity;
+      const stop = this.stopsById.get(a.stopId);
+      const ev = {
+        route: a.route,
+        stopId: a.stopId,
+        lat: stop?.stop_lat,
+        lon: stop?.stop_lon,
+        delay: a.delay,
+        occupancy: this.vehicleOccupancy.get(a.vehicleId)
+      };
+      // Arrival times are whole seconds; spread each within its second so the dings don't lock to a 1 s grid
+      setTimeout(() => this.playArrival(ev), Math.max(0, playIn) + Math.random() * 1000);
+    });
+    // ponytail: seenStops grows by ~4.5k trips a day; fine for a session, clear it if this runs for weeks
+  }
 
-        // Check if this bus has recently arrived at this stop (debouncing)
-        const arrivalKey = `${busId}-${stop.stop_id}`;
-        const lastArrival = this.recentArrivals.get(arrivalKey);
-        const timeSinceLastArrival = lastArrival ? (now - lastArrival) : Infinity;
+  playArrival(ev) {
+    this.arrivalTimes.push(Date.now());
+    // Ripple: colour = route, shape = area, late = ragged/red/slow, early = implodes
+    const late = Math.max(0, Math.min(1, (ev.delay - 60) / 540));
+    const early = Math.max(0, Math.min(1, (-ev.delay - 60) / 240));
+    const [sides, rot] = RIPPLE_SHAPES[routeFamily(ev.route)] || [0, 0];
+    if (ev.lat != null) this.mapManager.pulseAt(ev.lat, ev.lon, {
+      color: mixHex(this.colorFor(ev.route), '#fb7185', late), size: Utils.routeType(ev.route) === 2 ? 1.4 : 0.9,
+      sides, rot, late, early, duration: 1600 * (1 + 0.8 * late)
+    });
+    this.addArrivalEvent(ev.route, ev.stopId, ev.delay);
+    if (ev.delay > 180) this.addDelayEvent(ev.route, ev.delay, ev.stopId);
+    if (this.isAudioStarted) this.audio.arrival(ev);
+  }
 
-        // Trigger animation if bus is close to stop and getting closer AND hasn't recently arrived
-        if (distanceToStop < this.stopProximityThreshold &&
-          lastDistanceToStop > distanceToStop &&
-          distanceToStop < lastDistanceToStop - SHARED_CONSTANTS.PROXIMITY.APPROACH_THRESHOLD_METERS &&
-          timeSinceLastArrival > SHARED_CONSTANTS.POLLING.ARRIVAL_DEBOUNCE_MS) {
+  updateRouteStates() {
+    if (!this.mapManager) return;
+    this.listenerPos = this.listener();
+    this.updateReticle();
+    const overview = Utils.overviewWeight(this.listenerPos.radius);
+    const routes = this.mapManager.getCurrentLaggedRouteData();
+    const now = Date.now();
+    const positions = new Map();
+    const states = new Map();
+    const trains = [];
+    const ferries = [];
+    const buses = [];
+    let total = 0, bunchedTotal = 0, delaySum = 0, delayN = 0, early = 0;
 
-          // Calculate when the bus actually crossed the proximity threshold
-          const actualArrivalTime = this.interpolateArrivalTime(
-            lastPos, 
-            { lat: currentPos.latitude, lon: currentPos.longitude, timestamp: now },
-            stop,
-            this.stopProximityThreshold
-          );
-
-          // Mark this arrival to prevent spam
-          this.recentArrivals.set(arrivalKey, now);
-
-          // Calculate intensity based on how close (100m = 0.5, 0m = 1.0)
-          const intensity = Math.max(0.5, 1 - (distanceToStop / this.stopProximityThreshold));
-          this.mapManager.animateStopPulse(stop.stop_id, intensity);
-
-          // Schedule arrival audio blast at the correct time
-          if (this.isAudioStarted && this.audioManager) {
-            // Clean route ID consistently (handles both numbers and strings, removes trailing zeros)
-            const rawRouteId = bus.vehicle.trip?.route_id;
-            const routeId = this.cleanRouteId(rawRouteId);
-            
-            if (routeId) {
-              // Look up actual delay data for this stop
-              const delayData = this.stopDelays.get(stop.stop_id);
-              let actualDelay = 0; // Default to on-time
-              
-              if (delayData && delayData.routeId === routeId) {
-                // Use stored delay if route matches and data is recent (within 1 hour)
-                const dataAge = now / 1000 - delayData.recordedAt;
-                if (dataAge < 3600) { // 1 hour
-                  actualDelay = delayData.delay;
-                } else {
-                  console.log(`Delay data too old for stop ${stop.stop_id}, using default`);
-                }
-              }
-
-              // Schedule blast based on when arrival actually occurred (relative to real-time, not batch processing time)
-              this.scheduleArrivalBlastAtTime(routeId, actualDelay, stop, actualArrivalTime);
-            }
-          }
-
-          console.log(`Bus ${busId} arriving at stop ${stop.stop_id} (distance: ${distanceToStop.toFixed(0)}m)`);
+    routes.forEach((list, route) => {
+      const type = Utils.routeType(route);
+      let kmh = 0, nk = 0, delay = 0, nd = 0, latSum = 0, lonSum = 0, bunched = 0, nearest = null;
+      list.forEach((bus, i) => {
+        const p = bus.position;
+        // Speed over >=20 s: the map eases each 10 s report, so shorter windows pulse with the poll clock
+        let pos = this.lastStatePositions.get(bus.id);
+        if (!pos || now - pos.t >= 20000) {
+          const v = pos ? Utils.calculateDistance(pos.lat, pos.lon, p.latitude, p.longitude) / ((now - pos.t) / 1000) * 3.6 : null;
+          pos = { lat: p.latitude, lon: p.longitude, t: now, kmh: v > 130 ? null : v }; // >130: lagged position jumped (new trip / reappeared)
+        }
+        positions.set(bus.id, pos);
+        if (pos.kmh != null) { kmh += pos.kmh; nk++; }
+        const d = this.vehicleDelay.get(bus.id);
+        if (d != null) { delay += d; nd++; delaySum += d; delayN++; if (d < -60) early++; }
+        latSum += p.latitude;
+        lonSum += p.longitude;
+        const place = this.place(p.latitude, p.longitude);
+        if (!nearest || place.near > nearest.near) nearest = { lat: p.latitude, lon: p.longitude, near: place.near };
+        const vehicle = { id: bus.id, route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh };
+        if (type === 2) trains.push(vehicle);
+        else if (type === 4) ferries.push(vehicle);
+        else buses.push({ ...vehicle, place });
+        // Bunched: another vehicle on the route within 300 m heading roughly the same way
+        for (let j = i + 1; j < list.length; j++) {
+          const q = list[j].position;
+          const headingDiff = Math.abs(((p.bearing - q.bearing + 540) % 360) - 180);
+          if (headingDiff < 60 && Utils.calculateDistance(p.latitude, p.longitude, q.latitude, q.longitude) < 300) bunched++;
         }
       });
+      const n = list.length;
+      total += n;
+      bunchedTotal += bunched;
+      // A route sounds from its bus nearest you when zoomed in, sliding to its centroid as you zoom out
+      states.set(route, {
+        n, kmh: nk ? kmh / nk : 0, delay: nd ? delay / nd : 0, bunched,
+        lat: nearest.lat + (latSum / n - nearest.lat) * overview,
+        lon: nearest.lon + (lonSum / n - nearest.lon) * overview,
+        partner: null, contact: 0
+      });
+    });
 
-      // Cleanup old arrival records to prevent memory buildup
-      if (Math.random() < 0.001) { // 0.1% chance to cleanup
-        this.cleanupOldArrivals(now);
+    // Shared road: count bus pairs from different routes within 250 m of each other. A route's contact is
+    // how much it's mixing with other routes right now; its partner is the route it's mixing with most.
+    const pairs = new Map();
+    const bump = (a, b) => {
+      if (!pairs.has(a)) pairs.set(a, new Map());
+      pairs.get(a).set(b, (pairs.get(a).get(b) || 0) + 1);
+    };
+    const mPerLon = 111320 * Math.cos(-41.3 * Math.PI / 180);
+    for (let i = 0; i < buses.length; i++) {
+      for (let j = i + 1; j < buses.length; j++) {
+        const a = buses[i], b = buses[j];
+        if (a.route === b.route || Math.abs(a.lat - b.lat) > 0.0023) continue;
+        const dx = (a.lon - b.lon) * mPerLon, dy = (a.lat - b.lat) * 110540;
+        if (dx * dx + dy * dy < 250 * 250) { bump(a.route, b.route); bump(b.route, a.route); }
+      }
+    }
+    pairs.forEach((others, route) => {
+      const s = states.get(route);
+      let best = 0;
+      others.forEach((count, other) => {
+        s.contact += count;
+        if (count > best) { best = count; s.partner = other; }
+      });
+    });
+
+    // Traffic around the listener (zoomed in only): idling vs moving buses, weighted by closeness
+    const traffic = { idle: 0, moving: 0, speed: 0, pan: 0 };
+    let weight = 0, kmhSum = 0, kmhN = 0;
+    buses.forEach(b => {
+      if (b.kmh == null) return;
+      kmhSum += b.kmh;
+      kmhN++;
+      const w = b.place.local;
+      if (b.kmh < 3) traffic.idle += w; else { traffic.moving += w; traffic.speed += w * b.kmh; }
+      traffic.pan += w * b.place.pan;
+      weight += w;
+    });
+    if (traffic.moving) traffic.speed /= traffic.moving;
+    if (weight) traffic.pan /= weight;
+
+    this.detectDocking(ferries);
+    this.arrivalTimes = this.arrivalTimes.filter(t => now - t < 60000);
+    this.lastStatePositions = positions;
+    this.routeStates = states;
+    if (!this.isAudioStarted) return;
+    this.audio.update({
+      zoom: overview,
+      routes: states,
+      trains,
+      ferries,
+      traffic,
+      city: {
+        total,
+        meanDelay: delayN ? delaySum / delayN : 0,
+        earlyFrac: delayN ? early / delayN : 0,
+        kmh: kmhN ? kmhSum / kmhN : 0,
+        bunchedFrac: total ? bunchedTotal / total : 0,
+        arrivalsPerMin: this.arrivalTimes.length
       }
     });
   }
 
-  cleanupOldArrivals(currentTime) {
-    const cutoffTime = currentTime - SHARED_CONSTANTS.POLLING.ARRIVAL_DEBOUNCE_MS * 2; // Keep double the debounce time
-    let cleanedCount = 0;
-    
-    for (const [key, timestamp] of this.recentArrivals.entries()) {
-      if (timestamp < cutoffTime) {
-        this.recentArrivals.delete(key);
-        cleanedCount++;
+  // Docking: a ferry within 150 m of a wharf and (nearly) stopped. It has to get 400 m away before it can dock again,
+  // so bobbing at the wharf doesn't retrigger. Positions are the map's lagged ones, so this lines up with the picture.
+  detectDocking(ferries) {
+    for (const f of ferries) {
+      let best = null;
+      for (const [lat, lon, name] of this.wharves) {
+        const d = Utils.calculateDistance(f.lat, f.lon, lat, lon);
+        if (!best || d < best.d) best = { d, lat, lon, name };
+      }
+      if (!best) continue;
+      if (!this.docked.has(f.id) && best.d < 150 && (f.kmh == null || f.kmh < 5)) {
+        this.docked.add(f.id);
+        this.arrivalTimes.push(Date.now());
+        this.mapManager.pulseAt(best.lat, best.lon, { kind: 'ferry', color: FERRY_COLOR, duration: 3200 });
+        this.addArrivalEvent(f.route, best.name, 0);
+        if (this.isAudioStarted) this.audio.ferryArrival({ id: f.id, route: f.route, lat: best.lat, lon: best.lon });
+      } else if (this.docked.has(f.id) && best.d > 400) {
+        this.docked.delete(f.id);
       }
     }
-    
-    if (cleanedCount > 0) {
-      console.log(`Cleaned up ${cleanedCount} old arrival records`);
-    }
   }
 
-  cleanupOldDelayRecords(currentTime) {
-    const cutoffTime = currentTime - 3600; // Remove delay records older than 1 hour
-    let cleanedCount = 0;
-    
-    for (const [stopId, delayData] of this.stopDelays.entries()) {
-      if (delayData.recordedAt < cutoffTime) {
-        this.stopDelays.delete(stopId);
-        cleanedCount++;
-      }
-    }
-    
-    if (cleanedCount > 0) {
-      console.log(`Cleaned up ${cleanedCount} old delay records`);
-    }
+  // Hover tooltip: route chip, kind and note; then lateness, speed and how full it is (whatever the feed knows)
+  describe(id, route) {
+    const type = Utils.routeType(route);
+    const kind = { 2: 'Train', 4: 'Ferry' }[type] ?? 'Bus';
+    const delay = this.vehicleDelay.get(id);
+    const kmh = this.lastStatePositions.get(id)?.kmh;
+    const facts = [
+      delay != null && type !== 4 ? this.delayTag(delay) : '',
+      kmh != null ? `${Math.round(kmh)} km/h` : '',
+      OCCUPANCY[this.vehicleOccupancy.get(id)] ?? ''
+    ].filter(Boolean);
+    return `<div class="tip-head"><span class="chip" style="--c:${this.colorFor(route)}">${esc(route)}</span><b>${kind}</b><span class="tip-note">${this.audio.noteName(route)}</span></div>` +
+      (facts.length ? `<div class="tip-facts">${facts.join('<i>·</i>')}</div>` : '') +
+      `<div class="tip-hint">${this.mapManager.following === id ? 'Following' : 'Click to follow'}</div>`;
   }
 
-  interpolateArrivalTime(lastPos, currentPos, stop, threshold) {
-    // Calculate when the bus actually crossed the proximity threshold
-    
-    const lastDistance = Utils.calculateDistance(
-      lastPos.lat, lastPos.lon, stop.stop_lat, stop.stop_lon
-    );
-    const currentDistance = Utils.calculateDistance(
-      currentPos.lat, currentPos.lon, stop.stop_lat, stop.stop_lon
-    );
-    
-    // If bus was already within threshold, use the earlier timestamp
-    if (lastDistance <= threshold) {
-      return lastPos.timestamp;
-    }
-    
-    // Linear interpolation to find when bus crossed the threshold
-    const totalDistanceChange = lastDistance - currentDistance;
-    const distanceToThreshold = lastDistance - threshold;
-    
-    if (totalDistanceChange <= 0) {
-      // Bus is moving away or not moving, use current time
-      return currentPos.timestamp;
-    }
-    
-    // Calculate the fraction of time elapsed when threshold was crossed
-    const timeFraction = distanceToThreshold / totalDistanceChange;
-    const timeSpan = currentPos.timestamp - lastPos.timestamp;
-    
-    // Interpolated arrival time
-    const arrivalTime = lastPos.timestamp + (timeFraction * timeSpan);
-    
-    return arrivalTime;
+  showFollowing(id, route) {
+    this.followPill.hidden = !id;
+    if (id) this.followPill.querySelector('span').innerHTML = `Following <span class="chip" style="--c:${this.colorFor(route)}">${esc(route)}</span>`;
   }
 
-  scheduleArrivalBlastAtTime(routeId, delay, stop, arrivalTime) {
-    const now = Date.now();
-    const ageMs = now - arrivalTime;
-    
-    // Don't play blasts for very old arrivals
-    if (ageMs > SHARED_CONSTANTS.POLLING.MAX_BLAST_DELAY_MS) {
-      console.log(`Skipping arrival blast - too old (${(ageMs/1000).toFixed(1)}s ago)`);
-      return;
-    }
-    
-    // Add to display before playing
-    this.addArrivalEvent(routeId, stop.stop_id, delay, ageMs);
-    
-    const playDelayMs = Math.min(ageMs, 5000); // Cap at 5 seconds
-    
-    if (playDelayMs <= 100) {
-      // Play immediately for very recent arrivals
-      this.audioManager.triggerArrivalBlast(routeId, delay, stop.stop_lat, stop.stop_lon);
-      console.log(`Audio blast triggered immediately for route ${routeId} at stop ${stop.stop_id} (delay: ${delay}s, age: ${(ageMs/1000).toFixed(1)}s)`);
-    } else {
-      // Schedule blast to play proportionally to when it actually arrived
-      setTimeout(() => {
-        this.audioManager.triggerArrivalBlast(routeId, delay, stop.stop_lat, stop.stop_lon);
-      }, playDelayMs);
-      
-      console.log(`Audio blast scheduled for route ${routeId} at stop ${stop.stop_id} in ${(playDelayMs/1000).toFixed(1)}s (arrived ${(ageMs/1000).toFixed(1)}s ago, delay: ${delay}s)`);
-    }
+  colorFor(route) {
+    const type = Utils.routeType(route);
+    if (type === 2) return LINE_COLORS[route] || '#fbbf24';
+    if (type === 4) return FERRY_COLOR;
+    const semis = Math.round(12 * Math.log2(routePitch(route, this.modes.pitch) / 73.42));
+    return NOTE_COLORS[((semis % 12) + 12) % 12] || '#5eead4';
+  }
+
+  // Crosshair ring: where sound is at half strength. Fades out when zoomed right out (then everything is heard).
+  updateReticle() {
+    if (!this.mapManager?.map) return;
+    const l = this.listener();
+    const size = this.mapManager.map.getSize();
+    this.reticle.style.setProperty('--ring', `${Math.min(size.x, size.y)}px`);
+    this.reticle.style.setProperty('--ring-opacity', (1 - Utils.overviewWeight(l.radius)).toFixed(2));
+    this.listening.textContent = `${(l.hear / 1000).toFixed(1)} km`;
+  }
+
+  updateCounts() {
+    let buses = 0, trains = 0, ferries = 0;
+    this.routeBusData.forEach((list, route) => {
+      const type = Utils.routeType(route);
+      if (type === 2) trains += list.length; else if (type === 4) ferries += list.length; else buses += list.length;
+    });
+    this.countBuses.textContent = buses;
+    this.countTrains.textContent = trains;
+    this.countFerries.textContent = ferries;
+    this.countFerries.parentElement.hidden = !ferries;
+    this.countFerries.nextSibling.textContent = ferries === 1 ? ' ferry' : ' ferries';
+    this.routesCount.textContent = this.routeBusData.size;
   }
 
   updateActiveRoutesDisplay() {
-    if (!this.routeBusData || this.routeBusData.size === 0) {
-      this.activeRoutesDisplay.innerHTML = '<div class="no-events">No routes playing</div>';
+    if (document.getElementById('panel').classList.contains('collapsed')) return;
+    const routes = [...this.routeBusData].filter(([, list]) => list.length).sort((a, b) => b[1].length - a[1].length);
+    if (!routes.length) {
+      this.activeRoutesDisplay.innerHTML = '<div class="no-events">Waiting for vehicles…</div>';
       return;
     }
-
-    const routeElements = Array.from(this.routeBusData.entries())
-      .filter(([routeId, buses]) => buses.length > 0)
-      .map(([routeId, buses]) => {
-        const busCount = buses.length;
-        const frequency = this.audioManager ? this.audioManager.getRouteBaseFrequency(routeId) : 0;
-        
-        return `
-          <div class="audio-event">
-            <div class="event-route">
-              <span class="route-id">Route ${routeId}</span>
-              <span class="route-details">${busCount} buses</span>
-            </div>
-            <div class="route-details">${frequency.toFixed(0)}Hz pulse</div>
-          </div>
-        `;
-      })
-      .join('');
-
-    this.activeRoutesDisplay.innerHTML = routeElements;
+    const max = routes[0][1].length;
+    this.activeRoutesDisplay.innerHTML = routes.map(([route, list]) => {
+      const kind = { 2: 'train', 4: 'ferry' }[Utils.routeType(route)];
+      const what = kind ? kind + (list.length > 1 ? 's' : '') : (list.length > 1 ? 'buses' : 'bus');
+      return `<div class="row" style="--c:${this.colorFor(route)}">
+        <span class="chip">${esc(route)}</span>
+        <span class="main"><span class="sub">${list.length} ${what} · ${this.audio.noteName(route)}</span><span class="bar" style="--w:${(list.length / max).toFixed(3)}"></span></span>
+        ${this.delayTag(this.routeStates.get(route)?.delay ?? 0)}
+      </div>`;
+    }).join('');
   }
 
-  addArrivalEvent(routeId, stopId, delay, ageMs) {
-    const timestamp = new Date().toLocaleTimeString();
-    const delayClass = this.getDelayClass(delay);
-    const delayLabel = this.getDelayLabel(delay);
-    
-    const event = {
-      timestamp,
-      routeId,
-      stopId,
-      delay,
-      ageMs,
-      html: `
-        <div class="audio-event">
-          <div class="event-arrival">
-            <div class="arrival-stop">Stop ${stopId.substring(0, 8)}...</div>
-            <div class="arrival-details">
-              Route ${routeId} • ${timestamp}
-              <span class="delay-indicator ${delayClass}">${delayLabel}</span>
-            </div>
-          </div>
-        </div>
-      `
-    };
-
-    this.recentArrivalEvents.unshift(event);
-    if (this.recentArrivalEvents.length > this.maxEventHistory) {
-      this.recentArrivalEvents.pop();
-    }
-
-    this.updateArrivalsDisplay();
+  eventRow(route, stopId, delay) {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    return `<div class="row fresh" style="--c:${this.colorFor(route)}">
+      <span class="chip">${esc(route)}</span>
+      <span class="main"><span class="name">${esc(this.stopsById.get(stopId)?.stop_name || stopId)}</span><span class="sub mono">${time}</span></span>
+      ${this.delayTag(delay)}
+    </div>`;
   }
 
-  addDelayEvent(routeId, delayAmount, stopId) {
-    const timestamp = new Date().toLocaleTimeString();
-    
-    const event = {
-      timestamp,
-      routeId,
-      delayAmount,
-      stopId,
-      html: `
-        <div class="audio-event">
-          <div class="event-delay">
-            <span class="delay-route">Route ${routeId}</span>
-            <span class="delay-amount">${delayAmount}s delay</span>
-          </div>
-          <div class="arrival-details">${timestamp} • Stop ${stopId.substring(0, 8)}...</div>
-        </div>
-      `
-    };
-
-    this.recentDelayEvents.unshift(event);
-    if (this.recentDelayEvents.length > this.maxEventHistory) {
-      this.recentDelayEvents.pop();
-    }
-
-    this.updateDelayEventsDisplay();
+  pushRow(list, html) {
+    list.querySelector('.no-events')?.remove();
+    list.insertAdjacentHTML('afterbegin', html);
+    while (list.children.length > this.maxEventHistory) list.lastElementChild.remove();
   }
 
-  updateArrivalsDisplay() {
-    if (this.recentArrivalEvents.length === 0) {
-      this.recentArrivalsDisplay.innerHTML = '<div class="no-events">No recent arrivals</div>';
-      return;
-    }
-
-    const eventsHtml = this.recentArrivalEvents.map(event => event.html).join('');
-    this.recentArrivalsDisplay.innerHTML = eventsHtml;
+  addArrivalEvent(route, stopId, delay) {
+    this.pushRow(this.recentArrivalsDisplay, this.eventRow(route, stopId, delay));
+    this.arrivalsCount.textContent = `${this.arrivalTimes.length}/min`;
   }
 
-  updateDelayEventsDisplay() {
-    if (this.recentDelayEvents.length === 0) {
-      this.delayEventsDisplay.innerHTML = '<div class="no-events">No delay events</div>';
-      return;
-    }
-
-    const eventsHtml = this.recentDelayEvents.map(event => event.html).join('');
-    this.delayEventsDisplay.innerHTML = eventsHtml;
+  addDelayEvent(route, delay, stopId) {
+    this.pushRow(this.delayEventsDisplay, this.eventRow(route, stopId, delay));
+    this.delaysCount.textContent = Number(this.delaysCount.textContent) + 1;
   }
 
-  getDelayClass(delay) {
-    if (delay <= 60) return 'delay-ontime';
-    if (delay <= 300) return 'delay-light';
-    if (delay <= 480) return 'delay-medium';
-    return 'delay-heavy';
-  }
-
-  getDelayLabel(delay) {
-    if (delay <= 60) return 'On time';
-    if (delay <= 300) return `${Math.round(delay/60)}m late`;
-    if (delay <= 480) return `${Math.round(delay/60)}m late`;
-    return `${Math.round(delay/60)}m+ late`;
+  delayTag(delay) {
+    if (delay < -60) return `<span class="tag early">${Math.round(-delay / 60)}m early</span>`;
+    if (delay <= 60) return '<span class="tag">on time</span>';
+    return `<span class="tag ${delay > 300 ? 'very-late' : 'late'}">${Math.round(delay / 60)}m late</span>`;
   }
 
   clearAudioEvents() {
-    this.recentArrivalEvents = [];
-    this.recentDelayEvents = [];
-    this.updateArrivalsDisplay();
-    this.updateDelayEventsDisplay();
-    console.log('Audio events display cleared');
+    this.recentArrivalsDisplay.innerHTML = '<div class="no-events">No arrivals yet</div>';
+    this.delayEventsDisplay.innerHTML = '<div class="no-events">Nobody more than 3 minutes late</div>';
+    this.delaysCount.textContent = 0;
   }
 
   updateConnectionStatus(status) {
+    const state = status === 'Connected' ? 'connected' : /Error|Failed/.test(status) ? 'error' : 'connecting';
+    this.connectionDot.className = `dot ${state}`;
+    this.connectionDot.title = status;
     this.connectionStatus.textContent = status;
-    this.connectionStatus.className = 'value ' +
-      (status === 'Connected' ? 'connected' :
-        status.includes('Error') || status.includes('Failed') ? 'error' : 'connecting');
-  }
-
-  updateStatus(message) {
-    console.log(`Status: ${message}`);
-  }
-
-  // Debug method for canvas alignment issues
-  debugCanvasAlignment() {
-    if (this.mapManager && this.mapManager.canvasTrailsLayer) {
-      this.mapManager.canvasTrailsLayer.debugCanvasAlignment();
-    } else {
-      console.log('Canvas trails layer not available');
-    }
   }
 
   dispose() {
+    clearInterval(this.stateTimer);
     if (this.wsClient) {
       this.wsClient.disconnect();
     }
-    if (this.audioManager) {
-      this.audioManager.dispose();
+    if (this.isAudioStarted) {
+      this.audio.stop();
     }
     if (this.mapManager) {
       this.mapManager.dispose();
     }
-    if (this.stopSpatialIndex) {
-      this.stopSpatialIndex.clear();
-      this.stopSpatialIndex = null;
-    }
-    
-    // Clear arrival and delay tracking
-    this.recentArrivals.clear();
-    this.lastBusPositions.clear();
-    this.stopDelays.clear();
-    
+
+    this.seenStops.clear();
+    this.vehicleTrip.clear();
+    this.vehicleDelay.clear();
+    this.vehicleOccupancy.clear();
+
     // Clear audio events display
     this.clearAudioEvents();
   }

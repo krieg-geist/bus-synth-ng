@@ -85,6 +85,9 @@ if (!fs.existsSync(frontendPath)) {
   process.exit(1);
 }
 
+// One constants file for server and browser (a second frontend copy drifted and broke things)
+app.get('/js/constants.js', (req, res) => res.sendFile(path.join(__dirname, '../shared/constants.js')));
+
 // Serve frontend static files with proper MIME types
 app.use(express.static(frontendPath, {
   setHeaders: (res, filePath) => {
@@ -141,9 +144,6 @@ const broadcastUpdates = async () => {
         }
       });
 
-      console.log(`Broadcasted update to ${wss.clients.size} clients - ${buses.length} buses, ${updates.length} updates`);
-    } else {
-      console.log(`Cached update (no clients) - ${buses.length} buses, ${updates.length} updates`);
     }
 
   } catch (error) {
@@ -166,13 +166,7 @@ wss.on('connection', (ws) => {
         }
       });
 
-      console.log(`Sent ${historicalData.length} historical entries to new client`);
 
-      // Log cache stats for debugging
-      const stats = historicalCache.getStats();
-      console.log(`Historical cache stats: ${stats.entryCount} entries, ${(stats.timeSpan / 1000).toFixed(1)}s span, ${stats.totalBuses} total buses`);
-    } else {
-      console.log('No historical data available for new client');
     }
   } catch (error) {
     console.error('Error sending historical data:', error);
@@ -211,10 +205,12 @@ const initializeHistoricalCache = async () => {
 // Start initialization
 initializeHistoricalCache();
 
-// Graceful shutdown
-process.on('SIGINT', () => {
+// Graceful shutdown (SIGINT from Ctrl-C, SIGTERM from docker stop)
+const shutdown = () => {
   console.log('Shutting down gracefully...');
   historicalCache.dispose();
   wss.close();
   process.exit(0);
-});
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

@@ -6,13 +6,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "cross-env NODE_ENV=development node server.js",
-    "dev:watch": "cross-env NODE_ENV=development nodemon server.js"
+    "dev:watch": "cross-env NODE_ENV=development nodemon server.js",
+    "test": "node ../scripts/check-arrivals.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
-    "node-fetch": "^3.3.2",
     "ws": "^8.14.2"
   },
   "devDependencies": {
