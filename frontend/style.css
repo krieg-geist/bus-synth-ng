@@ -118,6 +118,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
     pointer-events: none;
 }
 
+/* GitHub / Instagram, always visible next to the title */
+.social { position: fixed; top: 9px; left: 168px; z-index: 1000; display: flex; gap: 4px; }
+.social-btn {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    color: var(--dim); background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px);
+    transition: color 0.15s, border-color 0.15s;
+}
+.social-btn .icon { width: 15px; height: 15px; }
+.social-btn:hover { color: var(--text); border-color: var(--line-strong); }
+
 .status {
     position: fixed; top: 10px; right: 12px;
     display: flex; align-items: center; gap: 12px;
@@ -284,6 +294,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .links { display: flex; flex: none; gap: 14px; align-items: center; padding: 10px 2px 0; margin-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; }
 .links a, .link-btn { color: var(--faint); text-decoration: none; }
+.icon-link { display: inline-flex; align-items: center; gap: 5px; color: var(--dim) !important; }
+.icon-link .icon { width: 14px; height: 14px; }
+.icon-link:hover { color: var(--text) !important; }
 .links a:hover, .link-btn:hover { color: var(--text); }
 .link-btn { margin-left: auto; font-size: 11.5px; }
 
@@ -329,6 +342,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
     font-size: 13px; font-weight: 600; transition: transform 0.15s, background 0.15s, color 0.15s;
 }
 .pill-primary { background: var(--accent); color: var(--accent-ink); }
+.intro-links { display: flex; gap: 8px; margin-left: auto; }
+.pill-ghost {
+    display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; border-radius: 999px; font-size: 12.5px;
+    color: var(--text); text-decoration: none; border: 1px solid var(--line-strong); transition: border-color 0.15s, background 0.15s;
+}
+.pill-ghost .icon { width: 15px; height: 15px; }
+.pill-ghost:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.3); }
 .pill-primary .icon { width: 16px; height: 16px; }
 .pill-primary:hover { transform: translateY(-1px); }
 .intro-foot { padding: 10px 0 18px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); }
@@ -337,6 +357,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 @media (max-width: 640px) {
     .brand { font-size: 11px; top: 17px; left: 14px; }
+    .social { top: 44px; left: 10px; }
+    .pill-ghost span { display: none; }
+    .pill-ghost { padding: 9px; }
     .status { gap: 8px; padding: 6px 12px; font-size: 11px; }
     .transport {
         left: 10px; right: 10px; bottom: 10px; transform: none;
