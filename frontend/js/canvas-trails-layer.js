@@ -1,467 +1,158 @@
-// Canvas-based trails layer with Catmull-Rom splines and smooth gradients
+// Canvas layer for vehicle trails. Each trail is a Catmull-Rom spline through the vehicle's recent GPS points, built
+// once per new point (every ~10 s) and projected once per zoom level; a frame only offsets, culls and strokes it,
+// fading from tail to head. Trails restart after a GPS jump (see InterpolatedMapManager.markJump).
 class CanvasTrailsLayer extends L.Layer {
   constructor(options = {}) {
     super();
-
-    this.options = {
-      trailLength: options.trailLength || 10,
-      minOpacity: options.minOpacity || 0.1,
-      maxOpacity: options.maxOpacity || 0.8,
-      trailWidth: options.trailWidth || 4,
-      splineResolution: options.splineResolution || 10, // Points per spline segment
-      ...options
-    };
-
-    this.canvas = null;
-    this.context = null;
-    this._bounds = null;
-    this._map = null;
-
-    // Trail data storage: busId -> trail data
-    this.trails = new Map();
-    this.lastUpdateTime = new Map();
-
-    // Performance tracking
-    this.lastRedraw = 0;
-    this.frameCount = 0;
+    this.options = { minOpacity: 0.04, maxOpacity: 0.75, resolution: 3, maxFps: 30, ...options };
+    this.trails = new Map(); // busId -> { key, c0, c1, width, pts: [lat, lon, ...], proj, zoom, bbox, head }
+    this.pixelRatio = window.devicePixelRatio || 1;
+    this.lastDraw = 0;
   }
 
   onAdd(map) {
-    this._map = map;
-    this.createCanvas();
-    this.setupEventHandlers();
+    this.map = map;
+    this.canvas = L.DomUtil.create('canvas', 'leaflet-canvas-trails-layer');
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: '150' });
+    map.getPanes().overlayPane.appendChild(this.canvas);
+    this.ctx = this.canvas.getContext('2d');
+    this.resize();
+    map.on('move zoom viewreset zoomend moveend', this.forceRedraw, this);
+    map.on('resize', this.resize, this);
     return this;
   }
 
-  onRemove() {
-    this.removeEventHandlers();
-    if (this.canvas && this.canvas.parentNode) {
-      this.canvas.parentNode.removeChild(this.canvas);
-    }
-    this.canvas = null;
-    this.context = null;
-    this._map = null;
+  onRemove(map) {
+    map.off('move zoom viewreset zoomend moveend', this.forceRedraw, this);
+    map.off('resize', this.resize, this);
+    this.canvas?.remove();
+    this.ctx = null;
+    return this;
   }
 
-  createCanvas() {
-    const size = this._map.getSize();
-    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
-
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = size.x;
-    this.canvas.height = size.y;
-    this.canvas.style.position = 'absolute';
-    this.canvas.style.pointerEvents = 'none';
-    this.canvas.style.zIndex = 200; // Above map tiles, below markers
-
-    // Use Leaflet's positioning utility for proper alignment
-    L.DomUtil.setPosition(this.canvas, topLeft);
-
-    this.context = this.canvas.getContext('2d');
-    this.context.imageSmoothingEnabled = false;
-    // this.context.imageSmoothingQuality = 'high';
-
-    this._map.getPanes().overlayPane.appendChild(this.canvas);
+  resize() {
+    const size = this.map.getSize();
+    this.canvas.width = size.x * this.pixelRatio;
+    this.canvas.height = size.y * this.pixelRatio;
+    this.canvas.style.width = size.x + 'px';
+    this.canvas.style.height = size.y + 'px';
+    this.ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
+    this.forceRedraw();
   }
 
-  setupEventHandlers() {
-    this._map.on('viewreset', this.reset, this);
-    this._map.on('zoom', this.reset, this);
-    this._map.on('zoomstart', this.reset, this);
-    this._map.on('zoomend', this.reset, this);
-    this._map.on('moveend', this.redraw, this);
-    this._map.on('move', this.updateCanvasPosition, this);
+  // history[start..end) are the trail's points (oldest first); head is the vehicle's displayed position.
+  // The spline is only rebuilt when that slice, the colour or the width changes.
+  setTrail(busId, history, start, end, color, width, head) {
+    const key = `${start}|${end}|${history[end - 1]?.timestamp}|${color}|${width}`;
+    let t = this.trails.get(busId);
+    if (!t || t.key !== key) {
+      const points = history.slice(start, end).filter((p, i, a) =>
+        i === 0 || Math.abs(p.lat - a[i - 1].lat) + Math.abs(p.lon - a[i - 1].lon) > 3e-5); // drop repeats (~3 m)
+      t = { key, width, pts: this.spline(points), zoom: null, c0: this.rgba(color, this.options.minOpacity), c1: this.rgba(color, this.options.maxOpacity) };
+      this.trails.set(busId, t);
+    }
+    t.head = head ? [head.lat, head.lon] : null;
   }
 
-  removeEventHandlers() {
-    if (this._map) {
-      this._map.off('viewreset', this.reset, this);
-      this._map.off('zoom', this.reset, this);
-      this._map.off('zoomstart', this.reset, this);
-      this._map.off('zoomend', this.reset, this);
-      this._map.off('moveend', this.redraw, this);
-      this._map.off('move', this.updateCanvasPosition, this);
-    }
-  }
-
-  reset() {
-    const size = this._map.getSize();
-    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
-
-    // Update canvas size
-    this.canvas.width = size.x;
-    this.canvas.height = size.y;
-
-    // Update canvas position
-    L.DomUtil.setPosition(this.canvas, topLeft);
-
-    // Restore context settings after canvas resize
-    this.context.imageSmoothingEnabled = true;
-    this.context.imageSmoothingQuality = 'high';
-
-    this.redraw();
-  }
-
-  updateCanvasPosition() {
-    if (!this.canvas || !this._map) return;
-
-    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
-    const currentPosition = L.DomUtil.getPosition(this.canvas);
-
-    // Only update if position has actually changed to avoid unnecessary redraws
-    if (!currentPosition || currentPosition.x !== topLeft.x || currentPosition.y !== topLeft.y) {
-      L.DomUtil.setPosition(this.canvas, topLeft);
-    }
-  }
-
-  // Update trail for a specific bus
-  updateBusTrail(busId, routeColor, trailPoints, currentPosition) {
-    // Combine trail points with current position for seamless rendering
-    const now = Date.now();
-    const lastUpdate = this.lastUpdateTime.get(busId) || 0;
-    if (now - lastUpdate < 100) return;
-    this.lastUpdateTime.set(busId, now);
-
-    const allPoints = [...trailPoints];
-    if (currentPosition) {
-      allPoints.push({
-        lat: currentPosition.lat,
-        lon: currentPosition.lon,
-        timestamp: Date.now(),
-        routeId: currentPosition.routeId
-      });
-    }
-
-    // Only keep recent points and ensure minimum points for spline
-    const recentPoints = allPoints
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-this.options.trailLength);
-
-    if (recentPoints.length < 2) {
-      // Not enough points for a trail
-      this.trails.delete(busId);
-      return;
-    }
-
-    // Filter out points that are too close to avoid rendering artifacts
-    const filteredPoints = this.filterClosePoints(recentPoints);
-
-    if (filteredPoints.length < 2) {
-      this.trails.delete(busId);
-      return;
-    }
-
-    // Store trail data
-    this.trails.set(busId, {
-      points: filteredPoints,
-      color: routeColor,
-      lastUpdate: Date.now()
-    });
-
-    // Redraw canvas to show updated trail immediately (throttled)
-    if (now - this.lastRedraw > 200) { // Throttle to ~60fps max
-      this.redraw();
-    }
-  }
-
-  // Remove duplicate or very close points to avoid spline artifacts
-  filterClosePoints(points) {
-    if (points.length < 2) return points;
-
-    const filtered = [points[0]];
-    const minDistance = 0.0001; // ~10 meters in decimal degrees
-    const maxDistance = 0.008;  // ~400 meters in decimal degrees - prevent huge jumps
-
-    for (let i = 1; i < points.length; i++) {
-      const current = points[i];
-      const last = filtered[filtered.length - 1];
-
-      const distance = Math.sqrt(
-        Math.pow(current.lat - last.lat, 2) +
-        Math.pow(current.lon - last.lon, 2)
-      );
-
-      // Skip points that are too close or too far
-      if (distance >= minDistance && distance <= maxDistance) {
-        filtered.push(current);
-      }
-    }
-
-    return filtered;
-  }
-
-  // Remove trail for a bus
   removeBusTrail(busId) {
     this.trails.delete(busId);
   }
 
-  // Clear all trails
   clearAllTrails() {
     this.trails.clear();
-    if (this.canvas && this.context) {
-      this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    }
+    this.forceRedraw();
   }
 
-  redraw() {
-    if (!this.canvas || !this.context || !this._map) return;
-
-    const now = Date.now();
-    this.frameCount++;
-
-    // Ensure canvas is properly positioned before drawing
-    this.updateCanvasPosition();
-
-    // Clear canvas
-    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-    // Get current map bounds for viewport culling
-    const bounds = this._map.getBounds();
-    const viewportPadding = 0.01; // Small padding to avoid edge clipping
-
-    // Draw all trails
-    this.trails.forEach((trail, busId) => {
-      try {
-        this.drawTrail(trail, bounds, viewportPadding);
-      } catch (error) {
-        console.warn(`Error drawing trail for bus ${busId}:`, error);
-      }
-    });
-
-    this.lastRedraw = now;
+  forceRedraw() {
+    this.redraw(true);
   }
 
-  drawTrail(trail, bounds, padding) {
-    const { points, color } = trail;
+  redraw(force = false) {
+    if (!this.ctx) return;
+    const now = performance.now();
+    if (!force && now - this.lastDraw < 1000 / this.options.maxFps) return;
+    this.lastDraw = now;
 
-    if (points.length < 2) return;
+    const map = this.map;
+    const ctx = this.ctx;
+    const size = map.getSize();
+    const zoom = map.getZoom();
+    ctx.clearRect(0, 0, size.x, size.y);
+    L.DomUtil.setPosition(this.canvas, map.containerPointToLayerPoint([0, 0]));
 
-    // Check if trail is in viewport (with padding)
-    const inViewport = points.some(point =>
-      point.lat >= bounds.getSouth() - padding &&
-      point.lat <= bounds.getNorth() + padding &&
-      point.lon >= bounds.getWest() - padding &&
-      point.lon <= bounds.getEast() + padding
-    );
-
-    if (!inViewport) return;
-
-    // Convert points to screen coordinates
-    const screenPoints = points.map(point => {
-      const screenPoint = this._map.latLngToContainerPoint([point.lat, point.lon]);
-      return {
-        x: screenPoint.x,
-        y: screenPoint.y,
-        timestamp: point.timestamp
-      };
-    });
-
-    // Filter out points that are outside the canvas bounds (with some padding)
-    const canvasBounds = {
-      left: -50,
-      top: -50,
-      right: this.canvas.width + 50,
-      bottom: this.canvas.height + 50
-    };
-
-    const visiblePoints = screenPoints.filter(point =>
-      point.x >= canvasBounds.left && point.x <= canvasBounds.right &&
-      point.y >= canvasBounds.top && point.y <= canvasBounds.bottom
-    );
-
-    if (visiblePoints.length < 2) return;
-
-    if (visiblePoints.length < 2) return;
-
-    // Generate Catmull-Rom spline
-    const splinePoints = this.generateCatmullRomSpline(visiblePoints);
-
-    if (splinePoints.length < 2) return;
-
-    // Draw trail with gradient
-    this.drawSplineWithGradient(splinePoints, color);
-  }
-
-  // Generate Catmull-Rom spline through points
-  generateCatmullRomSpline(points) {
-    if (points.length <= 3) {
-      // For short trails, return points directly instead of generating spline
-      return points.map((point, i) => ({
-        ...point,
-        progress: i / (points.length - 1)
-      }));
-    }
-    if (points.length < 2) return points;
-    if (points.length === 2) return points;
-
-    const splinePoints = [];
-    const resolution = this.options.splineResolution;
-
-    // For Catmull-Rom, we need to add control points at the ends
-    const controlPoints = [
-      points[0], // Duplicate first point
-      ...points,
-      points[points.length - 1] // Duplicate last point
-    ];
-
-    // Generate spline segments between actual points
-    for (let i = 1; i < controlPoints.length - 2; i++) {
-      const p0 = controlPoints[i - 1];
-      const p1 = controlPoints[i];
-      const p2 = controlPoints[i + 1];
-      const p3 = controlPoints[i + 2];
-
-      // Generate points along this segment
-      for (let t = 0; t < resolution; t++) {
-        const u = t / resolution;
-        const point = this.catmullRomInterpolate(p0, p1, p2, p3, u);
-
-        // Add progress along total spline for gradient calculation
-        const progress = (i - 1 + u) / (controlPoints.length - 3);
-        point.progress = Math.max(0, Math.min(1, progress));
-
-        splinePoints.push(point);
-      }
-    }
-
-    // Add final point
-    const lastPoint = controlPoints[controlPoints.length - 2];
-    lastPoint.progress = 1;
-    splinePoints.push(lastPoint);
-
-    return splinePoints;
-  }
-
-  // Catmull-Rom interpolation between four control points
-  catmullRomInterpolate(p0, p1, p2, p3, t) {
-    const t2 = t * t;
-    const t3 = t2 * t;
-
-    return {
-      x: 0.5 * (
-        (2 * p1.x) +
-        (-p0.x + p2.x) * t +
-        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-      ),
-      y: 0.5 * (
-        (2 * p1.y) +
-        (-p0.y + p2.y) * t +
-        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-      )
-    };
-  }
-
-  // Draw spline with smooth gradient from transparent tail to opaque head
-  drawSplineWithGradient(splinePoints, color) {
-    if (splinePoints.length < 2 || !this.context) return;
-
-    const ctx = this.context;
-
-    // Single path with gradient instead of individual segments
-    ctx.beginPath();
-    ctx.moveTo(splinePoints[0].x, splinePoints[0].y);
-
-    for (let i = 1; i < splinePoints.length; i++) {
-      ctx.lineTo(splinePoints[i].x, splinePoints[i].y);
-    }
-
-    // Apply gradient using canvas linear gradient
-    const gradient = ctx.createLinearGradient(
-      splinePoints[0].x, splinePoints[0].y,
-      splinePoints[splinePoints.length - 1].x, splinePoints[splinePoints.length - 1].y
-    );
-
-    gradient.addColorStop(0, this.colorWithOpacity(color, this.options.minOpacity));
-    gradient.addColorStop(1, this.colorWithOpacity(color, this.options.maxOpacity));
-
-    ctx.strokeStyle = gradient;
-    ctx.lineWidth = this.options.trailWidth;
+    // container point = projected point - pixel origin + map pane offset; work out the offset once per frame
+    const origin = map.getPixelOrigin();
+    const pane = map.layerPointToContainerPoint([0, 0]);
+    const ox = pane.x - origin.x, oy = pane.y - origin.y;
+    const pad = 40;
+    const s = Math.max(0.7, Math.min(1.7, 1 + 0.18 * (zoom - 13)));
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.stroke();
+
+    for (const t of this.trails.values()) {
+      if (t.pts.length / 2 + (t.head ? 1 : 0) < 2) continue;
+      if (t.zoom !== zoom) this.project(t, zoom);
+      const head = t.head && map.project(t.head, zoom);
+      const [bx0, by0, bx1, by1] = t.bbox;
+      const minX = Math.min(bx0, head ? head.x : Infinity) + ox, maxX = Math.max(bx1, head ? head.x : -Infinity) + ox;
+      const minY = Math.min(by0, head ? head.y : Infinity) + oy, maxY = Math.max(by1, head ? head.y : -Infinity) + oy;
+      if (maxX < -pad || minX > size.x + pad || maxY < -pad || minY > size.y + pad) continue;
+
+      const p = t.proj;
+      const x0 = p[0] + ox, y0 = p[1] + oy;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i] + ox, p[i + 1] + oy);
+      let xe = p[p.length - 2] + ox, ye = p[p.length - 1] + oy;
+      if (head) {
+        xe = head.x + ox;
+        ye = head.y + oy;
+        ctx.lineTo(xe, ye);
+      }
+      const g = ctx.createLinearGradient(x0, y0, xe, ye);
+      g.addColorStop(0, t.c0);
+      g.addColorStop(1, t.c1);
+      ctx.strokeStyle = g;
+      ctx.lineWidth = t.width * s;
+      ctx.stroke();
+    }
   }
 
-  // Convert color string to rgba with specified opacity
-  colorWithOpacity(color, opacity) {
-    // Handle hex colors
-    if (color.startsWith('#')) {
-      const hex = color.slice(1);
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  project(t, zoom) {
+    const proj = new Float64Array(t.pts.length);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < t.pts.length; i += 2) {
+      const q = this.map.project([t.pts[i], t.pts[i + 1]], zoom);
+      proj[i] = q.x;
+      proj[i + 1] = q.y;
+      minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x);
+      minY = Math.min(minY, q.y); maxY = Math.max(maxY, q.y);
     }
-
-    // Handle rgb colors - convert to rgba
-    if (color.startsWith('rgb(')) {
-      return color.replace('rgb(', 'rgba(').replace(')', `, ${opacity})`);
-    }
-
-    // Handle rgba colors - replace alpha
-    if (color.startsWith('rgba(')) {
-      return color.replace(/,\s*[\d.]+\)$/, `, ${opacity})`);
-    }
-
-    // Fallback to named color
-    return `rgba(128, 128, 128, ${opacity})`;
+    t.proj = proj;
+    t.bbox = [minX, minY, maxX, maxY];
+    t.zoom = zoom;
   }
 
-  // Force redraw (for external calls)
-  forceRedraw() {
-    // Ensure proper positioning before redraw
-    if (this._map && this.canvas) {
-      this.updateCanvasPosition();
+  // Catmull-Rom through the points in lat/lon (fine at city scale), as a flat [lat, lon, ...] array
+  spline(points) {
+    const out = [];
+    const res = this.options.resolution;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[Math.max(0, i - 1)], p1 = points[i], p2 = points[i + 1], p3 = points[Math.min(points.length - 1, i + 2)];
+      for (let k = 0; k < res; k++) {
+        const t = k / res, t2 = t * t, t3 = t2 * t;
+        const cr = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+        out.push(cr(p0.lat, p1.lat, p2.lat, p3.lat), cr(p0.lon, p1.lon, p2.lon, p3.lon));
+      }
     }
-    this.redraw();
+    const last = points[points.length - 1];
+    if (last) out.push(last.lat, last.lon);
+    return out;
   }
 
-  // Get performance statistics
-  getStats() {
-    const canvasPosition = this.canvas ? {
-      left: this.canvas.style.left,
-      top: this.canvas.style.top,
-      transform: this.canvas.style.transform,
-      width: this.canvas.width,
-      height: this.canvas.height
-    } : null;
-
-    return {
-      trailCount: this.trails.size,
-      frameCount: this.frameCount,
-      lastRedraw: this.lastRedraw,
-      canvasPosition,
-      averagePointsPerTrail: this.trails.size > 0 ?
-        Array.from(this.trails.values()).reduce((sum, trail) => sum + trail.points.length, 0) / this.trails.size : 0
-    };
-  }
-
-  // Debug method to check canvas alignment
-  debugCanvasAlignment() {
-    if (!this.canvas || !this._map) {
-      console.log('Canvas or map not available');
-      return;
-    }
-
-    const mapSize = this._map.getSize();
-    const canvasRect = this.canvas.getBoundingClientRect();
-    const mapRect = this._map.getContainer().getBoundingClientRect();
-    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
-    const currentPosition = L.DomUtil.getPosition(this.canvas);
-
-    console.log('Canvas Alignment Debug:', {
-      mapSize: { x: mapSize.x, y: mapSize.y },
-      canvasSize: { width: this.canvas.width, height: this.canvas.height },
-      mapRect: { left: mapRect.left, top: mapRect.top, width: mapRect.width, height: mapRect.height },
-      canvasRect: { left: canvasRect.left, top: canvasRect.top, width: canvasRect.width, height: canvasRect.height },
-      expectedTopLeft: topLeft,
-      actualPosition: currentPosition,
-      positionDiff: currentPosition ? {
-        x: currentPosition.x - topLeft.x,
-        y: currentPosition.y - topLeft.y
-      } : 'unknown'
-    });
+  rgba(hex, alpha) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
   }
 }
 

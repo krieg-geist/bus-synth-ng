@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- Base href is set by environment detection below -->
     <script>
         // Set base href dynamically based on environment - must be early in head
@@ -15,160 +15,101 @@
         })();
     </script>
     <title>Metlink Synth</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/15.2.7/Tone.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
     <script src="js/constants.js"></script>
+    <script src="js/route-meta.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="header-top">
-                <h1>Metlink Synth</h1>
-                <div class="controls">
-                    <button id="audio-toggle-btn" class="btn-primary">Stop Audio</button>
-                    <div class="volume-control">
-                        <label for="volume-slider">Volume</label>
-                        <input type="range" id="volume-slider" min="0" max="100" value="70">
-                        <span id="volume-value">70%</span>
-                    </div>
-                </div>
+    <div id="map-container" aria-label="Live map of Wellington buses and trains"></div>
+
+    <!-- You listen from the map centre; the ring is where sound drops to half -->
+    <div class="reticle" id="reticle" aria-hidden="true">
+        <div class="reticle-ring"></div>
+        <div class="reticle-dot"></div>
+        <span class="reticle-label mono" id="listening"></span>
+    </div>
+
+    <h1 class="brand">Metlink Synth</h1>
+
+    <div class="status glass">
+        <span class="dot" id="connection-dot" title="Connecting"></span>
+        <span class="sr-only" id="connection-status">Connecting</span>
+        <span class="stat"><b class="mono" id="count-buses">–</b> buses</span>
+        <span class="stat train"><b class="mono" id="count-trains">–</b> trains</span>
+    </div>
+
+    <aside class="panel glass" id="panel" aria-label="Info">
+        <button id="toggle-events" class="panel-tab" aria-expanded="true" aria-controls="panel-body" title="Hide panel">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Info</span>
+        </button>
+        <div class="panel-body" id="panel-body">
+            <div class="infobox" id="infobox">
+                <p>Wellington's buses and trains, live and 60 seconds behind, played as music. Every busy bus route hums its own note and plucks one at each stop; trains whine, clack and buzz into stations. Late routes go sour, routes sharing a road bend each other's sound, and a vehicle turning around at the end of its route glitches. Zoom in to listen closer: the ring is how far you hear.</p>
+                <button class="infobox-close" id="infobox-close" aria-label="Dismiss">×</button>
             </div>
-            
-            <div class="status-bar">
-                <div class="status-item">
-                    <span class="label">Connection</span>
-                    <span id="connection-status" class="value">Connecting...</span>
-                </div>
-                <div class="status-item">
-                    <span class="label">Buses</span>
-                    <span id="bus-count" class="value">0</span>
-                </div>
-                <div class="status-item">
-                    <span class="label">Audio</span>
-                    <span id="audio-status" class="value">Starting...</span>
-                </div>
+
+            <div class="legend">
+                <span class="key"><i class="swatch swatch-bus"></i>Bus · colour = note</span>
+                <span class="key"><i class="swatch swatch-train"></i>Train · colour = line</span>
+                <span class="key"><i class="swatch swatch-arrival"></i>Arrival · shape = area, ragged = late</span>
+                <span class="key"><i class="swatch swatch-turn"></i>Turnaround</span>
             </div>
-        </header>
-        
-        <main>
-            <div id="map-container"></div>
-        </main>
-        
-        <footer>
-            <div class="synthesis-info">
-                <h3>Audio Synthesis</h3>
-                <p>Bus count:  gain <br> Route orientation:  panning <br> Route geographic spread:  pitch mod <br> Total city activity:  master volume <br> Delays:  rhythm disruption <br> Arrivals:  noise blasts</p>
+
+            <div class="tabs" role="tablist">
+                <button role="tab" class="tab-btn active" data-tab="routes" aria-selected="true">Routes <span class="event-count" id="routes-count">0</span></button>
+                <button role="tab" class="tab-btn" data-tab="arrivals" aria-selected="false">Arrivals <span class="event-count" id="arrivals-count">0</span></button>
+                <button role="tab" class="tab-btn" data-tab="delays" aria-selected="false">Late <span class="event-count" id="delays-count">0</span></button>
             </div>
-            
-            <div class="audio-events-container">
-                <div class="audio-events-header">
-                    <h3>Live Events</h3>
-                    <div class="events-controls">
-                        <button id="toggle-events" class="btn-toggle">Hide</button>
-                        <button id="clear-events" class="btn-secondary">Clear</button>
-                    </div>
-                </div>
-                
-                <div id="audio-events-content" class="audio-events-content">
-                    <div class="events-tabs">
-                        <button class="tab-btn active" data-tab="routes">Routes</button>
-                        <button class="tab-btn" data-tab="arrivals">Arrivals</button>
-                        <button class="tab-btn" data-tab="delays">Delays</button>
-                    </div>
-                    
-                    <div class="tab-content">
-                        <div id="routes-tab" class="tab-panel active">
-                            <div class="tab-header">
-                                <h4>Active Routes</h4>
-                                <span class="event-count" id="routes-count">0</span>
-                            </div>
-                            <div id="active-routes" class="event-list">
-                                <div class="no-events">No routes playing</div>
-                            </div>
-                        </div>
-                        
-                        <div id="arrivals-tab" class="tab-panel">
-                            <div class="tab-header">
-                                <h4>Recent Arrivals</h4>
-                                <span class="event-count" id="arrivals-count">0</span>
-                            </div>
-                            <div id="recent-arrivals" class="event-list">
-                                <div class="no-events">No recent arrivals</div>
-                            </div>
-                        </div>
-                        
-                        <div id="delays-tab" class="tab-panel">
-                            <div class="tab-header">
-                                <h4>Delay Events</h4>
-                                <span class="event-count" id="delays-count">0</span>
-                            </div>
-                            <div id="delay-events" class="event-list">
-                                <div class="no-events">No delay events</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div class="tab-panels">
+                <div id="routes-tab" class="tab-panel active" role="tabpanel"><div id="active-routes" class="event-list"></div></div>
+                <div id="arrivals-tab" class="tab-panel" role="tabpanel"><div id="recent-arrivals" class="event-list"></div></div>
+                <div id="delays-tab" class="tab-panel" role="tabpanel"><div id="delay-events" class="event-list"></div></div>
             </div>
-        </footer>
-        
-        <div class="footer">
-            You are cordially invited to mess with this code:
-            <a href="https://github.com/krieg-geist/bus-synth-ng" target="_blank" rel="noopener noreferrer" class="footer-link">
-                <img src="https://s.magecdn.com/social/tc-github.svg" alt="GitHub" class="footer-icon">
-                Source
-            </a>
-            <a href="https://instagram.com/delusions_of_adequacy" target="_blank" rel="noopener noreferrer" class="footer-link">
-                <img src="https://s.magecdn.com/social/tc-instagram.svg" alt="Instagram" class="footer-icon">
-                Instagram
-            </a>
+
+            <footer class="links">
+                <a href="https://github.com/krieg-geist/bus-synth-ng" target="_blank" rel="noopener noreferrer">Source</a>
+                <a href="https://instagram.com/delusions_of_adequacy" target="_blank" rel="noopener noreferrer">Instagram</a>
+                <button id="clear-events" class="link-btn">Clear lists</button>
+            </footer>
         </div>
+    </aside>
+
+    <div class="transport glass" role="toolbar" aria-label="Sound controls">
+        <button id="audio-toggle-btn" class="play" aria-pressed="false">
+            <svg class="icon icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+            <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+            <span id="audio-status" class="sr-only">Listen</span>
+        </button>
+        <label class="volume" title="Volume">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <input type="range" id="volume-slider" min="0" max="100" value="70" aria-label="Volume">
+            <span id="volume-value" class="sr-only">70%</span>
+        </label>
+        <fieldset class="segmented" title="Pitch: longer route = lower, or one chord tone per area">
+            <legend class="sr-only">Pitch</legend>
+            <input type="radio" name="pitch-mode" id="pitch-length" value="length" checked><label for="pitch-length">Length</label>
+            <input type="radio" name="pitch-mode" id="pitch-family" value="family"><label for="pitch-family">Area</label>
+        </fieldset>
+        <fieldset class="segmented" title="Drone: every busy route, or only the 8 busiest">
+            <legend class="sr-only">Drone</legend>
+            <input type="radio" name="drone-mode" id="drone-emergent" value="emergent" checked><label for="drone-emergent">All</label>
+            <input type="radio" name="drone-mode" id="drone-top8" value="top8"><label for="drone-top8">Top 8</label>
+        </fieldset>
     </div>
 
     <script src="js/websocket.js"></script>
     <script src="js/utils.js"></script>
-    <script src="js/spatial-index.js"></script>
-    <script src="js/route-pulse-audio.js"></script>
+    <script src="js/route-synth.js"></script>
     <script src="js/canvas-stops-layer.js"></script>
     <script src="js/canvas-trails-layer.js"></script>
     <script src="js/interpolated-map-manager.js"></script>
     <script src="js/app.js"></script>
-    
-    <script>
-        // Tab functionality for audio events
-        document.addEventListener('DOMContentLoaded', function() {
-            const tabButtons = document.querySelectorAll('.tab-btn');
-            const tabPanels = document.querySelectorAll('.tab-panel');
-            const toggleBtn = document.getElementById('toggle-events');
-            const eventsContent = document.getElementById('audio-events-content');
-            
-            // Tab switching
-            tabButtons.forEach(btn=>  {
-                btn.addEventListener('click', () =>  {
-                    const tabId = btn.dataset.tab;
-                    
-                    // Update active tab button
-                    tabButtons.forEach(b=>  b.classList.remove('active'));
-                    btn.classList.add('active');
-                    
-                    // Update active tab panel
-                    tabPanels.forEach(panel =>  {
-                        panel.classList.remove('active');
-                        if (panel.id === `${tabId}-tab`) {
-                            panel.classList.add('active');
-                        }
-                    });
-                });
-            });
-            
-            // Toggle events panel
-            toggleBtn.addEventListener('click', () =>  {
-                const isHidden = eventsContent.style.display === 'none';
-                eventsContent.style.display = isHidden ? 'block' : 'none';
-                toggleBtn.textContent = isHidden ? 'Hide' : 'Show';
-            });
-        });
-    </script>
+
 </body>
 </html>

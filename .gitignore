@@ -31,3 +31,7 @@ pids/
 *.pid
 *.seed
 *.pid.lock
+
+# Local tool state
+.claude/
+.serena/

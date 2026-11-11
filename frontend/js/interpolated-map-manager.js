@@ -1,17 +1,17 @@
 const MAP_CONSTANTS = SHARED_CONSTANTS.MAP;
 
 class InterpolatedMapManager {
-  constructor(containerId) {
+  constructor(containerId, { colorFor } = {}) {
     this.containerId = containerId;
+    this.colorFor = colorFor; // route -> colour; see BusSynthApp.colorFor
     this.map = null;
     this.busMarkers = new Map();
     this.canvasStopsLayer = null; // Canvas-based stop rendering
     this.canvasTrailsLayer = null; // Canvas-based trail rendering (replaces polyline trails)
     this.bounds = null;
-    this.routeColors = new Map();
-    this.colorIndex = 0;
 
     // Interpolation and animation
+    this.suspects = new Map(); // busId -> a report that jumped, waiting for the next one to confirm or refute it
     this.busPositionHistory = new Map(); // busId -> array of {position, timestamp}
     this.currentInterpolatedPositions = new Map(); // busId -> current lagged position
     this.currentTime = Date.now();
@@ -20,38 +20,43 @@ class InterpolatedMapManager {
     this.hasInitialData = false; // Track if we've received first dataset
     this.animationFrame = null;
     this.isAnimating = false;
-    this.isProcessingHistoricalData = false; // Track if we're still receiving historical data
     this.historicalDataCount = 0; // Count historical entries received
     this.lastAnimationTime = Date.now(); // Track animation timing for gap detection
     this.wasDocumentHidden = false; // Track document visibility state
 
     // Performance optimization
     this.viewportBounds = null;
-    this.visibleBuses = new Set();
 
     // Trail settings
     this.trailLength = MAP_CONSTANTS.TRAIL.LENGTH_SEGMENTS;
-    this.trailFadeSteps = MAP_CONSTANTS.TRAIL.FADE_STEPS;
-    this.lastSkipLog = 0; // Throttle skip logging
 
     // A lot of this shit should probably not be hardcoded
-    this.busIconSvg = (color, rotation = 0, scale = 1) => `
-      <svg width="${MAP_CONSTANTS.BUS_ICON.WIDTH * scale}" height="${MAP_CONSTANTS.BUS_ICON.HEIGHT * scale}" viewBox="0 0 ${MAP_CONSTANTS.BUS_ICON.WIDTH} ${MAP_CONSTANTS.BUS_ICON.HEIGHT}" style="transform: rotate(${rotation}deg)">
-        <rect x="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH / 2}" y="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH / 2}" width="${MAP_CONSTANTS.BUS_ICON.WIDTH - MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" height="${MAP_CONSTANTS.BUS_ICON.HEIGHT - MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" fill="${color}" stroke="#fff" stroke-width="${MAP_CONSTANTS.BUS_ICON.STROKE_WIDTH}" rx="${MAP_CONSTANTS.BUS_ICON.BORDER_RADIUS}"/>
-      </svg>
-    `;
-
-    this.getFrontCenterAnchor = () => {
-      return [MAP_CONSTANTS.BUS_ICON.WIDTH/2, MAP_CONSTANTS.BUS_ICON.HEIGHT / 2]; // Center horizontally, exactly at front edge
+    // Vehicle markers, scaled with zoom. A bus is a rounded bar with a dark windscreen at the front (so you can see
+    // which way it's heading) in its note colour. A train is three bus-width carriages in its line colour, windscreen
+    // on the front one: the middle carriage sits on the GPS fix and the others hinge at their couplings by half the
+    // bend each, so the train curves along its track.
+    this.vehicleIcon = (color, rotation, type, zoom, bend = 0) => {
+      const s = Math.max(0.7, Math.min(1.7, 1 + 0.18 * (zoom - 13)));
+      const w = 7 * s;
+      const car = type === 2 ? 10 * s : 15 * s;
+      const body = (y, front) =>
+        `<rect x="${-w / 2 + 0.5}" y="${y + 0.5}" width="${w - 1}" height="${car - 1}" rx="${1.8 * s}" fill="${color}" stroke="rgba(5,8,12,.85)" stroke-width="1"/>` +
+        (front ? `<rect x="${-w / 2 + 1.4 * s}" y="${y + 1.4 * s}" width="${w - 2.8 * s}" height="${2.2 * s}" rx="${0.6 * s}" fill="rgba(5,8,12,.55)"/>` : '');
+      let size, shapes;
+      if (type === 2) {
+        const gap = 1.6 * s, half = car / 2;
+        size = Math.ceil(2 * Math.hypot(half + gap + car, w / 2) + 2);
+        shapes = `<g transform="rotate(${rotation - bend / 2})">${body(-half, false)}` +
+          `<g transform="rotate(${bend / 2} 0 ${-half - gap / 2})">${body(-half - gap - car, true)}</g>` +
+          `<g transform="rotate(${-bend / 2} 0 ${half + gap / 2})">${body(half + gap, false)}</g></g>`;
+      } else {
+        size = Math.ceil(car + 2);
+        shapes = `<g transform="rotate(${rotation})">${body(-car / 2, true)}</g>`;
+      }
+      const html = `<svg width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}">${shapes}</svg>`;
+      return L.divIcon({ html, className: type === 2 ? 'vehicle-marker train' : 'vehicle-marker', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
     };
 
-    // Stop pulse icon
-    this.stopPulseIconSvg = (color, scale = 1) => `
-      <svg width="${MAP_CONSTANTS.STOP_PULSE.WIDTH * scale}" height="${MAP_CONSTANTS.STOP_PULSE.HEIGHT * scale}" viewBox="0 0 ${MAP_CONSTANTS.STOP_PULSE.WIDTH} ${MAP_CONSTANTS.STOP_PULSE.HEIGHT}">
-        <circle cx="${MAP_CONSTANTS.STOP_PULSE.WIDTH / 2}" cy="${MAP_CONSTANTS.STOP_PULSE.HEIGHT / 2}" r="${MAP_CONSTANTS.STOP_PULSE.OUTER_RADIUS}" fill="${color}" opacity="0.8"/>
-        <circle cx="${MAP_CONSTANTS.STOP_PULSE.WIDTH / 2}" cy="${MAP_CONSTANTS.STOP_PULSE.HEIGHT / 2}" r="${MAP_CONSTANTS.STOP_PULSE.INNER_RADIUS}" fill="#fff" opacity="0.9"/>
-      </svg>
-    `;
   }
 
   async initialize(stops, bounds) {
@@ -66,34 +71,29 @@ class InterpolatedMapManager {
     this.map = L.map(this.containerId, {
       center: [centerLat, centerLon],
       zoom: 11,
-      zoomControl: true,
+      zoomControl: false,
+      zoomSnap: 0.25, // the vector basemap renders fractional zoom cleanly, so the initial fit can be tight
       attributionControl: true
     });
+    L.control.zoom({ position: 'bottomright' }).addTo(this.map);
+    this.map.fitBounds([[bounds[0][0], bounds[1][0]], [bounds[0][1], bounds[1][1]]], { padding: [20, 20] });
 
-    // Add Dark Matter tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 19
+    // Basemap: OpenFreeMap vector tiles (free, no key) drawn by MapLibre inside Leaflet.
+    // CARTO's raster tiles now stamp every tile with "API KEY REQUIRED".
+    const basemap = L.maplibreGL({
+      style: 'https://tiles.openfreemap.org/styles/dark',
+      attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'
     }).addTo(this.map);
+    // The style references a "wood-pattern" sprite it doesn't ship; a blank stand-in keeps the console clean
+    const gl = basemap.getMaplibreMap();
+    gl.on('styleimagemissing', e => { if (!gl.hasImage(e.id)) gl.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) }); });
 
     // Add canvas-based stop layer
-    this.canvasStopsLayer = new CanvasStopsLayer(stops, {
-      stopColor: '#ff6b6b',
-      stopRadius: 3,
-      animationDuration: 2000,
-      maxAnimationScale: 3
-    });
+    this.canvasStopsLayer = new CanvasStopsLayer(stops);
     this.map.addLayer(this.canvasStopsLayer);
     
     // Add canvas-based trails layer
-    this.canvasTrailsLayer = new CanvasTrailsLayer({
-      trailLength: MAP_CONSTANTS.TRAIL.LENGTH_SEGMENTS,
-      minOpacity: 0.1,
-      maxOpacity: 0.8,
-      trailWidth: 4,
-      splineResolution: 3
-    });
+    this.canvasTrailsLayer = new CanvasTrailsLayer();
     this.map.addLayer(this.canvasTrailsLayer);
 
     // Set up viewport tracking
@@ -118,7 +118,6 @@ class InterpolatedMapManager {
     // Add page visibility listeners to handle focus/unfocus issues
     this.setupVisibilityHandlers();
 
-    console.log(`Interpolated map initialized with ${stops.length} stops`);
   }
 
   setupVisibilityHandlers() {
@@ -126,9 +125,7 @@ class InterpolatedMapManager {
     this.handleVisibilityChange = () => {
       if (document.hidden) {
         this.wasDocumentHidden = true;
-        console.log('Tab hidden - animation will be reset on return');
       } else if (this.wasDocumentHidden) {
-        console.log('Tab visible again - clearing trails and connecting lines');
         this.clearAllTrailsAndConnections();
         this.wasDocumentHidden = false;
         this.lastAnimationTime = Date.now(); // Reset timing
@@ -144,7 +141,6 @@ class InterpolatedMapManager {
       this.canvasTrailsLayer.clearAllTrails();
     }
     
-    console.log('Cleared all trails');
   }
 
   updateViewportBounds() {
@@ -178,13 +174,13 @@ class InterpolatedMapManager {
 
       // Hopefully this will detect tab switching or long pauses
       if (timeSinceLastFrame > MAP_CONSTANTS.TIMING.MAX_TIME_GAP_MS) {
-        console.log(`Large time gap detected (${(timeSinceLastFrame / 1000).toFixed(1)}s) - clearing trails`);
         this.clearAllTrailsAndConnections();
       }
 
       this.currentTime = now;
       this.lastAnimationTime = now;
       this.updateInterpolatedPositions();
+      this.canvasTrailsLayer?.redraw();
       this.cleanupOldHistory();
 
       this.animationFrame = requestAnimationFrame(animate);
@@ -201,98 +197,32 @@ class InterpolatedMapManager {
     }
   }
   updateBuses(buses, isHistorical = false) {
-    const timestamp = Date.now();
-
-    // Handle historical data with adjusted timeline for smooth startup
+    // Historical entries (sent on connect) are spread over the last 90 s so the lagged display has data at once
+    let received = Date.now();
     if (isHistorical) {
-      this.isProcessingHistoricalData = true;
       this.historicalDataCount++;
-
-      const adjustedTimestamp = timestamp - (MAP_CONSTANTS.TIMING.HISTORICAL_SPREAD_MS - (this.historicalDataCount * MAP_CONSTANTS.TIMING.HISTORICAL_INTERVAL_MS));
-
-      buses
-        .filter(bus => bus.vehicle && bus.vehicle.position)
-        .forEach(bus => {
-          const busId = bus.vehicle.vehicle.id;
-          const rawRouteId = bus.vehicle.trip.route_id;
-          // Clean route ID
-          const routeId = this.cleanRouteId(rawRouteId);
-          const position = bus.vehicle.position;
-
-          if (!this.busPositionHistory.has(busId)) {
-            this.busPositionHistory.set(busId, []);
-          }
-
-          const history = this.busPositionHistory.get(busId);
-          history.push({
-            lat: position.latitude,
-            lon: position.longitude,
-            bearing: position.bearing || 0,
-            routeId: routeId, // Use cleaned route ID
-            timestamp: adjustedTimestamp
-          });
-
-          // Limit history length for performance
-          if (history.length > 100) {
-            history.shift();
-          }
-        });
-
-      console.log(`Processed historical entry ${this.historicalDataCount} with ${buses.length} buses at adjusted time ${new Date(adjustedTimestamp).toLocaleTimeString()}`);
-      return;
-    }
-
-    // Handle real-time data normally
-    this.isProcessingHistoricalData = false;
-
-    // Mark that we have initial data
-    if (!this.hasInitialData && buses.length > 0) {
+      received -= MAP_CONSTANTS.TIMING.HISTORICAL_SPREAD_MS - this.historicalDataCount * MAP_CONSTANTS.TIMING.HISTORICAL_INTERVAL_MS;
+    } else if (buses.length > 0) {
       this.hasInitialData = true;
-      console.log('Real-time data started - historical data processing complete');
     }
 
-    // Add new bus positions to history
-    buses
-      .filter(bus => bus.vehicle && bus.vehicle.position)
-      .forEach(bus => {
-        const busId = bus.vehicle.vehicle.id;
-        const rawRouteId = bus.vehicle.trip.route_id;
-        // Clean route ID (remove trailing zeros, handle strings and numbers)
-        const routeId = this.cleanRouteId(rawRouteId);
-        const position = bus.vehicle.position;
-
-        if (!this.busPositionHistory.has(busId)) {
-          this.busPositionHistory.set(busId, []);
-        }
-
-        const history = this.busPositionHistory.get(busId);
-        history.push({
-          lat: position.latitude,
-          lon: position.longitude,
-          bearing: position.bearing || 0,
-          routeId: routeId,
-          timestamp: timestamp
-        });
-
-        // Limit history length for performance
-        if (history.length > 100) {
-          history.shift();
-        }
+    // Vehicles missing from this poll are kept: a gap in reporting just continues (see cleanupOldHistory)
+    buses.forEach(bus => {
+      if (!this.validPosition(bus)) return;
+      const v = bus.vehicle;
+      const busId = v.vehicle.id;
+      if (!this.busPositionHistory.has(busId)) this.busPositionHistory.set(busId, []);
+      this.addPosition(busId, {
+        lat: v.position.latitude,
+        lon: v.position.longitude,
+        bearing: v.position.bearing || 0,
+        routeId: this.cleanRouteId(v.trip?.route_id),
+        timestamp: received,
+        reported: (v.timestamp || 0) * 1000 // the vehicle's own report time
       });
-
-    // Remove history for buses that are no longer present
-    const activeBusIds = new Set(buses
-      .filter(bus => bus.vehicle && bus.vehicle.position)
-      .map(bus => bus.vehicle.vehicle.id));
-
-    for (const busId of this.busPositionHistory.keys()) {
-      if (!activeBusIds.has(busId)) {
-        this.removeBus(busId);
-      }
-    }
-
-    console.log(`Added positions for ${activeBusIds.size} buses at ${new Date(timestamp).toLocaleTimeString()}`);
+    });
   }
+
 
   updateInterpolatedPositions() {
     // Use consistent 1-minute lag for smooth interpolation
@@ -342,7 +272,7 @@ class InterpolatedMapManager {
       const progress = totalTime > 0 ? Math.max(0, Math.min(1, elapsedTime / totalTime)) : 0;
 
       // Use smooth step function for even smoother interpolation
-      const smoothProgress = progress * progress * (3 - 2 * progress);
+      const smoothProgress = afterPos.jump ? 0 : progress * progress * (3 - 2 * progress); // after a jump: step, don't fly
 
       const interpolatedPos = {
         lat: this.lerp(beforePos.lat, afterPos.lat, smoothProgress),
@@ -379,15 +309,15 @@ class InterpolatedMapManager {
       const markerData = this.busMarkers.get(busId);
       markerData.marker.setLatLng([position.lat, position.lon]); // Exact GPS position
 
-      // Update icon rotation and anchor for front center
-      const iconHtml = this.busIconSvg(color, position.bearing);
-      const frontAnchor = this.getFrontCenterAnchor();
-      markerData.marker.setIcon(L.divIcon({
-        html: iconHtml,
-        className: 'bus-marker',
-        iconSize: [6, 16], // Updated for new orientation
-        iconAnchor: frontAnchor // Front center of bus at exact GPS coordinates
-      }));
+      // Rebuilding the icon replaces its DOM node, so only do it when what it shows has changed
+      const zoom = this.map.getZoom();
+      const type = Utils.routeType(position.routeId);
+      const bend = type === 2 ? this.trainBend(busId, position) : 0;
+      const key = `${color}|${Math.round(position.bearing / 3)}|${zoom}|${bend}`;
+      if (markerData.iconKey !== key) {
+        markerData.iconKey = key;
+        markerData.marker.setIcon(this.vehicleIcon(color, position.bearing, type, zoom, bend));
+      }
 
       // Add to map if not visible
       if (!markerData.isVisible) {
@@ -396,16 +326,8 @@ class InterpolatedMapManager {
       }
     } else {
       // Create new marker
-      const iconHtml = this.busIconSvg(color, position.bearing);
-      const frontAnchor = this.getFrontCenterAnchor();
-      const marker = L.marker([position.lat, position.lon], {
-        icon: L.divIcon({
-          html: iconHtml,
-          className: 'bus-marker',
-          iconSize: [6, 16], // Updated for new orientation
-          iconAnchor: frontAnchor
-        })
-      });
+      const type = Utils.routeType(position.routeId);
+      const marker = L.marker([position.lat, position.lon], { icon: this.vehicleIcon(color, position.bearing, type, this.map.getZoom()) });
 
       // Custom tooltip with timeout
       let tooltipTimeout = null;
@@ -415,7 +337,7 @@ class InterpolatedMapManager {
         permanent: false,
         direction: 'top',
         className: 'bus-tooltip'
-      }).setContent(`Bus: ${busId}<br/>Route: ${displayRouteId}`);
+      }).setContent(`${type === 2 ? 'Train' : 'Bus'} ${busId} · route ${displayRouteId}`);
 
       marker.bindTooltip(tooltip);
 
@@ -445,33 +367,78 @@ class InterpolatedMapManager {
 
   updateBusTrail(busId, history, currentDisplayTime) {
     if (!this.canvasTrailsLayer) return;
-    
-    // Filter trail history to only include points up to current display time
-    const trailHistory = history
-      .filter(pos => pos.timestamp <= currentDisplayTime)
-      .slice(-this.trailLength);
-    
-    if (trailHistory.length < 2) {
-      // Not enough points for a trail
-      this.canvasTrailsLayer.removeBusTrail(busId);
-      return;
-    }
-    
-    // Get current interpolated position to create seamless trail+connection
-    const currentPosition = this.currentInterpolatedPositions.get(busId);
-    const routeColor = this.getRouteColor(trailHistory[0].routeId);
-    
-    // Update canvas trail (automatically handles trail + connection unity)
-    this.canvasTrailsLayer.updateBusTrail(busId, routeColor, trailHistory, currentPosition);
+    // Points up to the display time, at most trailLength of them, starting again after the last GPS jump
+    let end = history.length;
+    while (end > 0 && history[end - 1].timestamp > currentDisplayTime) end--;
+    let start = Math.max(0, end - this.trailLength);
+    for (let i = end - 1; i > start; i--) if (history[i].jump) { start = i; break; }
+    const route = history[0].routeId;
+    const width = Utils.routeType(route) === 2 ? 2.6 : 1.8;
+    this.canvasTrailsLayer.setTrail(busId, history, start, end, this.getRouteColor(route), width, this.currentInterpolatedPositions.get(busId));
   }
 
-  animateStopPulse(stopId, intensity = 1) {
-    if (!this.canvasStopsLayer) return;
+  // Reports outside the Wellington region are bad GPS (often 0,0): skip them
+  validPosition(bus) {
+    const p = bus.vehicle?.position;
+    return !!p && p.latitude > -42.5 && p.latitude < -40 && p.longitude > 173.5 && p.longitude < 177;
+  }
 
-    // Delegate to canvas layer
-    this.canvasStopsLayer.animateStopPulse(stopId, intensity);
+  // Add a report to a vehicle's history. The feed repeats a quiet vehicle's last report, so repeats are skipped and the
+  // vehicle simply continues across the gap when it reports again. A huge instantaneous jump is held as a suspect:
+  // dropped if the next report is back near the old track, accepted if the next report agrees with it (the vehicle
+  // really moved), in which case it's marked so the marker steps instead of flying and the trail restarts.
+  addPosition(busId, p) {
+    const history = this.busPositionHistory.get(busId);
+    const last = history[history.length - 1];
+    if (last && p.reported && p.reported === last.reported) return;
+    if (last && this.isJump(last, p)) {
+      const suspect = this.suspects.get(busId);
+      if (suspect && !this.isJump(suspect, p)) {
+        this.suspects.delete(busId);
+        suspect.jump = true;
+        history.push(suspect, p);
+      } else {
+        this.suspects.set(busId, p);
+      }
+    } else {
+      this.suspects.delete(busId);
+      history.push(p);
+    }
+    if (history.length > 100) history.splice(0, history.length - 100);
+  }
 
-    console.log(`Map: Triggered stop pulse for ${stopId} with intensity ${intensity}`);
+  // Over 1.5 km at more than ~150 km/h (~250 km/h for trains), timed by the vehicle's own report times so a long
+  // silence followed by a long move is not a jump
+  isJump(a, b) {
+    const metres = Utils.calculateDistance(a.lat, a.lon, b.lat, b.lon);
+    const ms = a.reported && b.reported ? b.reported - a.reported : b.timestamp - a.timestamp;
+    return metres > 1500 && metres / Math.max(1, ms / 1000) > (Utils.routeType(b.routeId) === 2 ? 70 : 42);
+  }
+
+
+
+  // How much a train bends: its heading now against the direction it came from, measured from the last position at
+  // least ~60 m back along its track. Quantised to 5 degrees (fewer icon rebuilds); 0 when reversing at a terminus.
+  trainBend(busId, position) {
+    const history = this.busPositionHistory.get(busId) || [];
+    const kx = 111320 * Math.cos(position.lat * Math.PI / 180);
+    for (let i = history.length - 1; i >= 0; i--) {
+      const h = history[i];
+      if (h.timestamp > position.timestamp) continue;
+      const dx = (position.lon - h.lon) * kx, dy = (position.lat - h.lat) * 110540;
+      if (dx * dx + dy * dy < 3600) continue;
+      const bend = ((position.bearing - Math.atan2(dx, dy) * 180 / Math.PI + 540) % 360) - 180;
+      return Math.abs(bend) > 60 ? 0 : Math.max(-40, Math.min(40, Math.round(bend / 5) * 5));
+    }
+    return 0;
+  }
+
+  animateStopPulse(stopId, size = 1, color) {
+    this.canvasStopsLayer?.animateStopPulse(stopId, size, color);
+  }
+
+  pulseAt(lat, lon, opts) {
+    this.canvasStopsLayer?.pulseAt(lat, lon, opts);
   }
 
   renderVisibleFeatures() {
@@ -516,43 +483,25 @@ class InterpolatedMapManager {
 
     // Remove position history
     this.busPositionHistory.delete(busId);
+    this.suspects.delete(busId);
 
     // Remove current interpolated position
     this.currentInterpolatedPositions.delete(busId);
   }
 
+  // Trim history beyond the trail length; drop vehicles that have been silent for STALE_VEHICLE_MS
   cleanupOldHistory() {
-    const cutoffTime = this.currentTime - this.maxHistoryAge;
-
+    const cutoff = this.currentTime - this.maxHistoryAge;
+    const stale = this.currentTime - MAP_CONSTANTS.TIMING.STALE_VEHICLE_MS;
     this.busPositionHistory.forEach((history, busId) => {
-      // Remove old positions
-      while (history.length > 0 && history[0].timestamp < cutoffTime) {
-        history.shift();
-      }
-
-      // Remove bus entirely if no recent history
-      if (history.length === 0 ||
-        (history.length > 0 && history[history.length - 1].timestamp < cutoffTime)) {
-        this.removeBus(busId);
-      }
+      while (history.length > 1 && history[0].timestamp < cutoff) history.shift();
+      if (!history.length || history[history.length - 1].timestamp < stale) this.removeBus(busId);
     });
   }
 
+
   getRouteColor(routeId) {
-    if (!this.routeColors.has(routeId)) {
-      const colors = [
-        '#00bcd4', '#4caf50', '#ff9800', '#e91e63',
-        '#9c27b0', '#3f51b5', '#009688', '#8bc34a',
-        '#ffeb3b', '#ff5722', '#795548', '#607d8b',
-        '#f44336', '#2196f3', '#ffc107', '#673ab7'
-      ];
-
-      const color = colors[this.colorIndex % colors.length];
-      this.routeColors.set(routeId, color);
-      this.colorIndex++;
-    }
-
-    return this.routeColors.get(routeId);
+    return this.colorFor(routeId);
   }
 
   // Linear interpolation
@@ -649,31 +598,10 @@ class InterpolatedMapManager {
     this.busMarkers.clear();
     this.busPositionHistory.clear();
     this.currentInterpolatedPositions.clear();
-    this.availableColors = [];
   }
 
   cleanRouteId(routeId) {
-    if (!routeId) return routeId;
-    
-    // Handle both string and number route IDs
-    if (typeof routeId === 'number') {
-      // Remove trailing zero from numeric route IDs (Metlink convention)
-      if (routeId % 10 === 0) {
-        return routeId / 10;
-      }
-      return routeId;
-    }
-    
-    // Handle string route IDs (like trains)
-    if (typeof routeId === 'string') {
-      // Remove trailing zero from numeric strings
-      if (/^\d+0$/.test(routeId) && routeId.length > 1) {
-        return routeId.slice(0, -1);
-      }
-      return routeId;
-    }
-    
-    return routeId;
+    return Utils.routeName(routeId);
   }
 }
 

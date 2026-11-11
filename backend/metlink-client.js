@@ -1,5 +1,4 @@
-const fetch = require('node-fetch').default;
-
+// Node's built-in fetch (Node 18+; engines requires 20)
 class MetlinkClient {
   constructor(apiKey) {
     this.apiKey = apiKey;

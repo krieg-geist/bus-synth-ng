@@ -3,7 +3,6 @@ class WebSocketClient {
     this.ws = null;
     this.isConnected = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = SHARED_CONSTANTS.NETWORK.WS_RECONNECT_MAX_ATTEMPTS;
     this.reconnectDelay = SHARED_CONSTANTS.NETWORK.WS_RECONNECT_BASE_DELAY;
     this.onMessage = null;
     this.onStatusChange = null;
@@ -65,20 +64,12 @@ class WebSocketClient {
     }
   }
 
+  // Keep trying (laptops sleep, servers restart), backing off to at most 30 s between attempts
   handleReconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-      
-      this.updateStatus(`Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-      
-      setTimeout(() => {
-        console.log(`Reconnection attempt ${this.reconnectAttempts}`);
-        this.connect();
-      }, delay);
-    } else {
-      this.updateStatus('Connection failed');
-    }
+    if (this.closing) return;
+    this.reconnectAttempts++;
+    this.updateStatus('Reconnecting');
+    setTimeout(() => this.connect(), Math.min(30000, this.reconnectDelay * 2 ** (this.reconnectAttempts - 1)));
   }
 
   updateStatus(status) {
@@ -88,6 +79,7 @@ class WebSocketClient {
   }
 
   disconnect() {
+    this.closing = true;
     if (this.ws) {
       this.ws.close();
       this.ws = null;

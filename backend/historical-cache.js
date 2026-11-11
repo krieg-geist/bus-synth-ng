@@ -34,7 +34,6 @@ class HistoricalDataCache {
       this.cleanup();
     }
     
-    console.log(`Added historical entry: ${entry.buses.length} buses, ${entry.updates.length} updates (total: ${this.entries.length} entries)`);
   }
 
   /**
@@ -59,38 +58,12 @@ class HistoricalDataCache {
    */
   cleanup() {
     const cutoffTime = Date.now() - this.maxAge;
-    const initialCount = this.entries.length;
-    
     this.entries = this.entries.filter(entry => entry.timestamp >= cutoffTime);
-    
-    const removedCount = initialCount - this.entries.length;
-    if (removedCount > 0) {
-      console.log(`Historical cache cleanup: removed ${removedCount} old entries, ${this.entries.length} remaining`);
-    }
   }
 
   /**
    * Get current cache statistics
    */
-  getStats() {
-    if (this.entries.length === 0) {
-      return { entryCount: 0, oldestAge: 0, newestAge: 0, totalBuses: 0 };
-    }
-
-    const now = Date.now();
-    const oldest = Math.min(...this.entries.map(e => e.timestamp));
-    const newest = Math.max(...this.entries.map(e => e.timestamp));
-    const totalBuses = this.entries.reduce((sum, e) => sum + e.buses.length, 0);
-
-    return {
-      entryCount: this.entries.length,
-      oldestAge: now - oldest,
-      newestAge: now - newest,
-      totalBuses,
-      timeSpan: newest - oldest
-    };
-  }
-
   /**
    * Clear all historical data
    */
