@@ -171,6 +171,7 @@ class InterpolatedMapManager {
     if (this.isAnimating) return;
     this.isAnimating = true;
     this.lastAnimationTime = Date.now();
+    this.lastStep = 0;
 
     const animate = () => {
       if (!this.isAnimating) return;
@@ -185,15 +186,27 @@ class InterpolatedMapManager {
 
       this.currentTime = now;
       this.lastAnimationTime = now;
-      this.updateInterpolatedPositions();
+      if (now - this.lastStep >= this.stepInterval()) {
+        this.lastStep = now;
+        this.updateInterpolatedPositions();
+        this.canvasTrailsLayer?.redraw(true);
+        this.cleanupOldHistory();
+      }
       this.trackFollowed();
-      this.canvasTrailsLayer?.redraw();
-      this.cleanupOldHistory();
 
       this.animationFrame = requestAnimationFrame(animate);
     };
 
     animate();
+  }
+
+  // How often vehicles and trails need redrawing: about every half pixel of movement for a 50 km/h vehicle at this
+  // zoom, so 2 fps zoomed right out (a bus crawls 0.2 px a second there) up to 30 fps at street level. Every frame
+  // while following a vehicle, so the camera stays smooth. Panning and zooming redraw on their own events.
+  stepInterval() {
+    if (this.following) return 0;
+    const metresPerPx = 88300 / 2 ** this.map.getZoom(); // 156543 m/px at zoom 0, times cos(41.3 degrees S)
+    return Math.max(33, Math.min(500, (0.5 * metresPerPx / 14) * 1000));
   }
 
   stopAnimation() {

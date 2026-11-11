@@ -79,6 +79,13 @@ class BusSynthApp {
     };
     document.querySelectorAll('input[name="pitch-mode"], input[name="drone-mode"]').forEach(input => input.addEventListener('change', setModes));
     scale.addEventListener('change', setModes);
+    // Lite mode: on by default on phones. A new sample rate needs a new audio context, so a running engine restarts.
+    const lite = document.getElementById('lite-mode');
+    lite.checked = RouteSynth.liteDefault;
+    lite.addEventListener('change', async () => {
+      RouteSynth.setLite(lite.checked);
+      if (this.isAudioStarted) { this.stopAudio(); await this.startAudio(); }
+    });
     // Mix sliders: 0-150%, squared so the travel feels even (150% = +7 dB)
     document.querySelectorAll('input[data-level]').forEach(input =>
       input.addEventListener('input', () => this.audio?.setLevel(input.dataset.level, (input.value / 100) ** 2)));

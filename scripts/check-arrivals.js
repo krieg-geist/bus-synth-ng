@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const ctx = { window: {} };
+// The browser globals route-synth.js reads at load (lite-mode detection)
+const ctx = { window: {}, URLSearchParams, location: { search: '' }, navigator: { userAgent: '' } };
 vm.createContext(ctx);
 for (const f of ['route-meta.js', 'utils.js', 'route-synth.js']) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js', f), 'utf8'), ctx);

@@ -8,10 +8,11 @@ class CanvasStopsLayer extends L.Layer {
     this.stops = stops;
     this.stopsById = new Map(stops.map(s => [s.stop_id, s]));
     this.options = { stopColor: '#3a4456', ...options };
-    this.canvas = null;
+    this.canvas = null; // ripples, animated at up to 30 fps while there are any
     this.ctx = null;
-    this.base = document.createElement('canvas'); // idle stops, redrawn only when the view moves
-    this.baseCtx = this.base.getContext('2d');
+    this.base = null; // idle stops, on their own canvas so ripple frames don't repaint them
+    this.baseCtx = null;
+    this.lastDraw = 0;
     this.pixelRatio = window.devicePixelRatio || 1;
     this.ripples = []; // { lat, lon, start, duration, size, color, kind }
     this.animationFrame = null;
@@ -20,8 +21,12 @@ class CanvasStopsLayer extends L.Layer {
 
   onAdd(map) {
     this.map = map;
+    this.base = L.DomUtil.create('canvas', 'leaflet-canvas-stops-layer');
+    Object.assign(this.base.style, { position: 'absolute', pointerEvents: 'none', zIndex: '200' });
+    this.map.getPanes().overlayPane.appendChild(this.base);
+    this.baseCtx = this.base.getContext('2d');
     this.canvas = L.DomUtil.create('canvas', 'leaflet-canvas-stops-layer');
-    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: '200' });
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: '201' });
     this.map.getPanes().overlayPane.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
     this.resize();
@@ -39,6 +44,7 @@ class CanvasStopsLayer extends L.Layer {
     cancelAnimationFrame(this.animationFrame);
     this.animationFrame = null;
     this.canvas?.remove();
+    this.base?.remove();
     return this;
   }
 
@@ -51,6 +57,8 @@ class CanvasStopsLayer extends L.Layer {
     this.canvas.style.height = size.y + 'px';
     this.base.width = this.canvas.width;
     this.base.height = this.canvas.height;
+    this.base.style.width = this.canvas.style.width;
+    this.base.style.height = this.canvas.style.height;
     this.ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
     this.baseCtx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
     this.reset();
@@ -58,12 +66,14 @@ class CanvasStopsLayer extends L.Layer {
 
   reset() {
     if (!this.canvas) return;
-    L.DomUtil.setPosition(this.canvas, this.map.containerPointToLayerPoint([0, 0]));
+    const origin = this.map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this.canvas, origin);
+    L.DomUtil.setPosition(this.base, origin);
     this.drawStops();
     this.redraw();
   }
 
-  // Idle stops: barely there, a little firmer as you zoom in. Cached, since ripples redraw every frame.
+  // Idle stops: barely there, a little firmer as you zoom in. Drawn only when the view changes.
   drawStops() {
     const ctx = this.baseCtx;
     const size = this.map.getSize();
@@ -98,11 +108,10 @@ class CanvasStopsLayer extends L.Layer {
     const ctx = this.ctx;
     const size = this.map.getSize();
     ctx.clearRect(0, 0, size.x, size.y);
-
-    ctx.drawImage(this.base, 0, 0, size.x, size.y);
     const zoom = this.map.getZoom();
 
     const now = performance.now();
+    this.lastDraw = now;
     const scale = Math.max(0.7, Math.min(1.7, 1 + 0.18 * (zoom - 13))); // same zoom scaling as vehicles
     this.ripples = this.ripples.filter(rp => now - rp.start < rp.duration);
     for (const rp of this.ripples) {
@@ -157,12 +166,15 @@ class CanvasStopsLayer extends L.Layer {
     }
     ctx.globalAlpha = 1;
 
-    if (this.ripples.length && !this.animationFrame) {
-      this.animationFrame = requestAnimationFrame(() => {
-        this.animationFrame = null;
-        this.redraw();
-      });
-    }
+    if (this.ripples.length && !this.animationFrame) this.nextFrame();
+  }
+
+  nextFrame() { // ripples at up to 30 fps: they're slow enough, and it halves the repaints
+    this.animationFrame = requestAnimationFrame(() => {
+      this.animationFrame = null;
+      if (performance.now() - this.lastDraw < 30) this.nextFrame();
+      else this.redraw();
+    });
   }
 
   // Polygon ring (sides 0 = circle) with optional per-vertex wobble, for ripples

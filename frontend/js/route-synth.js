@@ -30,13 +30,23 @@ const SCALES = {
   chromatic: Array.from({ length: 12 }, (_, st) => 2 ** (st / 12)) // anything goes
 };
 let SCALE = SCALES.pentatonic; // the current scale; set through RouteSynth.setModes({ scale })
-const MAX_NOTES = 48; // cap on overlapping notes
+// Lite mode (settings checkbox; on by default on phones, or set with ?lite=1 / ?lite=0): half the sample rate, which
+// roughly halves the DSP (zoomed out the master is lowpassed at 5 kHz anyway), and smaller voice budgets
+const IS_PHONE = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const LITE_DEFAULT = (new URLSearchParams(location.search).get('lite') ?? (IS_PHONE ? '1' : '0')) === '1';
+let LITE, MAX_NOTES, MAX_DRONES, BED_VOICES, NEAR_VOICES, MAX_TRAINS;
+function setBudgets(lite) { // the sample rate applies from the next start()
+  LITE = lite;
+  MAX_NOTES = lite ? 24 : 48; // cap on overlapping notes
+  MAX_DRONES = lite ? 16 : 32; // route drones when zoomed out
+  BED_VOICES = lite ? 6 : 8; // route drones kept as background in close-up mode
+  NEAR_VOICES = lite ? 14 : 36; // per-bus voices in close-up mode; past this the furthest are dropped
+  MAX_TRAINS = lite ? 10 : Infinity; // nearest trains kept
+}
+setBudgets(LITE_DEFAULT);
 const TOP_N = 8;
 const SPACE = 0.35; // seconds for camera-driven changes
-const MAX_DRONES = 32; // route drones when zoomed out (with these budgets a peak-hour offline render runs ~2.3x real time)
 const MIX_TRIM = { bus: 1, train: 0.36, ferry: 1, arrival: 1 }; // fader 100% = this gain; trains = the old 60% (-9 dB)
-const BED_VOICES = 8; // route drones kept as background in close-up mode
-const NEAR_VOICES = 36; // per-bus voices in close-up mode; past this the furthest are dropped
 const NOTE_GAIN = 0.12;
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -144,6 +154,12 @@ const crushCurve = bits => CRUSH_CURVES[bits] ??= Float32Array.from({ length: 10
   const q = 2 ** (bits - 1);
   return Math.round((i / 511.5 - 1) * q) / q;
 });
+// Output safety: linear up to 0.85, then rounds off towards 1.0, so an overshoot past the limiter saturates instead of
+// clipping hard. Indexed for input -2..2 (fed through a 0.5 gain), so even a 2x overshoot stays smooth.
+const SAFETY_CURVE = Float32Array.from({ length: 4096 }, (_, i) => {
+  const u = 2 * (i / 2047.5 - 1), a = Math.abs(u);
+  return a <= 0.85 ? u : Math.sign(u) * (0.85 + 0.15 * Math.tanh((a - 0.85) / 0.15));
+});
 const BUZZ_CURVE = Float32Array.from({ length: 1024 }, (_, i) => Math.tanh(5 * (i / 511.5 - 1))); // hard-ish clip
 
 class RouteSynth {
@@ -161,16 +177,28 @@ class RouteSynth {
     this.activeNotes = 0;
   }
 
+  static get liteDefault() {
+    return LITE_DEFAULT;
+  }
+
+  static setLite(on) {
+    setBudgets(on);
+  }
+
   get running() {
     return !!this.ctx;
   }
 
   async start(volume) {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // 'playback' asks for bigger output buffers: more latency, far fewer underruns. Everything here is scheduled
+    // seconds ahead (the map runs 60 s behind live), so the latency costs nothing.
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    let ctx;
+    try { ctx = new Ctx({ latencyHint: 'playback', ...(LITE && { sampleRate: 24000 }) }); } catch { ctx = new Ctx({ latencyHint: 'playback' }); }
     if (ctx.state === 'suspended') await ctx.resume();
     const node = (Type, opts) => new Type(ctx, opts);
     this.master = node(GainNode, { gain: volume });
-    this.master.connect(ctx.destination);
+    this.master.connect(node(GainNode, { gain: 0.5 })).connect(node(WaveShaperNode, { curve: SAFETY_CURVE })).connect(ctx.destination);
     const limiter = node(DynamicsCompressorNode, { threshold: -6, knee: 0, ratio: 20, attack: 0.003, release: 0.25 });
     limiter.connect(this.master);
     // Master tone follows zoom (see update): zoomed out is softer and distant, zoomed in opens up with a little grit
@@ -482,6 +510,7 @@ class RouteSynth {
 
   // zoomedIn: 0 at region view .. 1 at street level; trains come forward and get rougher as you zoom in
   updateTrains(trains, now, zoomedIn = 0) {
+    if (trains.length > MAX_TRAINS) trains = trains.map(t => [t, this.place(t.lat, t.lon).near]).sort((a, b) => b[1] - a[1]).slice(0, MAX_TRAINS).map(([t]) => t);
     const seen = new Set();
     for (const t of trains) {
       seen.add(t.id);
