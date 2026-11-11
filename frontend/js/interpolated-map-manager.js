@@ -22,7 +22,6 @@ class InterpolatedMapManager {
     this.hasInitialData = false;
     this.animationFrame = null;
     this.isAnimating = false;
-    this.historicalDataCount = 0;
     this.lastAnimationTime = Date.now();
     this.wasDocumentHidden = false;
 
@@ -204,15 +203,11 @@ class InterpolatedMapManager {
       this.animationFrame = null;
     }
   }
-  updateBuses(buses, isHistorical = false) {
-    // Historical entries (sent on connect) are spread over the last 90 s so the lagged display has data at once
-    let received = Date.now();
-    if (isHistorical) {
-      this.historicalDataCount++;
-      received -= MAP_CONSTANTS.TIMING.HISTORICAL_SPREAD_MS - this.historicalDataCount * MAP_CONSTANTS.TIMING.HISTORICAL_INTERVAL_MS;
-    } else if (buses.length > 0) {
-      this.hasInitialData = true;
-    }
+  updateBuses(buses, isHistorical = false, age = 0) {
+    // Historical entries (the server's last 3 minutes of polls, sent on connect) go in at the time they were polled,
+    // so the lagged display and the trails have data at once
+    const received = Date.now() - (isHistorical ? age : 0);
+    if (!isHistorical && buses.length > 0) this.hasInitialData = true;
 
     // Vehicles missing from this poll are kept: a gap in reporting just continues (see cleanupOldHistory)
     buses.forEach(bus => {

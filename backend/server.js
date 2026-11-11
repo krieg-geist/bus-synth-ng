@@ -156,7 +156,7 @@ wss.on('connection', (ws) => {
       // Send each historical entry as a separate message to match real-time format
       historicalData.forEach(entry => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(entry));
+          ws.send(JSON.stringify({ ...entry, age: Date.now() - entry.timestamp })); // age: client clocks differ
         }
       });
 

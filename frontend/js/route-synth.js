@@ -59,6 +59,11 @@ function glide(param, target, secs, now, tolerance) {
   param.linearRampToValueAtTime(target, now + secs);
 }
 
+// Control rate: one value per 128-sample block (2.7 ms) instead of per sample. For params that glide over tenths of a
+// second or more it's inaudible, and a filter then recomputes its coefficients once a block instead of every sample.
+// Left at audio rate: anything with an audio-rate input (FM) or a fast envelope (notes), and gains with an LFO input.
+const kRate = (...params) => params.forEach(p => { p.automationRate = 'k-rate'; });
+
 function family(m) {
   const n = parseInt(m.name, 10);
   if (m.type === 2) return 'rail';
@@ -171,6 +176,7 @@ class RouteSynth {
     // Master tone follows zoom (see update): zoomed out is softer and distant, zoomed in opens up with a little grit
     this.mixBus = node(GainNode);
     this.tone = node(BiquadFilterNode, { type: 'lowpass', frequency: 5000, Q: 0.5 });
+    kRate(this.tone.frequency);
     this.drive = node(GainNode);
     this.makeup = node(GainNode);
     this.mixBus.connect(this.tone).connect(this.drive).connect(node(WaveShaperNode, { curve: SOFT_CURVE })).connect(this.makeup).connect(limiter);
@@ -248,6 +254,17 @@ class RouteSynth {
     noise.start();
     throbOsc.start();
     this.traffic = { rumble, whoosh, whooshBP, pan: trafficPan };
+
+    // Rail roar noise, shared by all trains instead of a noise source and filter each: three decorrelated loops for
+    // the electric units (a train takes one, so the few near you rarely share) and one for the diesel
+    const roarLoop = cutoff => {
+      const src = node(AudioBufferSourceNode, { buffer: this.noise, loop: true });
+      const lp = node(BiquadFilterNode, { type: 'lowpass', frequency: cutoff, Q: 0.8 });
+      src.connect(lp);
+      src.start(0, Math.random() * 3);
+      return lp;
+    };
+    this.roars = { electric: [340, 340, 340].map(roarLoop), diesel: [roarLoop(220)] };
 
     this.activeNotes = 0;
     this.ctx = ctx;
@@ -459,6 +476,7 @@ class RouteSynth {
     });
     const lfoDepth = node(GainNode, { gain: 0 }); // fed by a shared sway LFO (see updateDrones)
     lfoDepth.connect(out.gain);
+    kRate(space.gain, reverbSend.gain, glitchSend.gain, pan.pan, filter.frequency, filter.Q, oscs[1].frequency, oscs[0].detune, oscs[1].detune);
     return { out, space, pan, filter, oscs, fmIn, fmDelay, fmSrc: null, lfoDepth, band: null, reverbSend, glitchSend, freq, hold: 0, fadeTimer: null };
   }
 
@@ -517,7 +535,7 @@ class RouteSynth {
       v.fadeTimer = setTimeout(() => {
         v.body.stop();
         v.whine?.stop();
-        v.roarSrc.stop();
+        v.roarSrc.disconnect(v.roar); // or the shared noise keeps the voice alive
         v.space.disconnect();
         this.trains.delete(id);
       }, 2000);
@@ -541,11 +559,10 @@ class RouteSynth {
     body.connect(node(BiquadFilterNode, { type: 'lowpass', frequency: diesel ? 180 : 600 }))
       .connect(node(GainNode, { gain: diesel ? 0.5 : 0.35 })).connect(pan);
     body.start();
-    // Rail roar: looping noise through a low band, level set per update by speed and closeness
-    const roarSrc = node(AudioBufferSourceNode, { buffer: this.noise, loop: true, loopStart: Math.random() * 3 });
+    // Rail roar: a shared low noise band (see start), level set per update by speed and closeness
     const roar = node(GainNode, { gain: 0 });
-    roarSrc.connect(node(BiquadFilterNode, { type: 'lowpass', frequency: diesel ? 220 : 340, Q: 0.8 })).connect(roar).connect(pan);
-    roarSrc.start(0, Math.random() * 3);
+    const roarSrc = this.roars[diesel ? 'diesel' : 'electric'][this.trains.size % (diesel ? 1 : 3)];
+    roarSrc.connect(roar).connect(pan);
     const v = { out, space, pan, body, reverbSend, roar, roarSrc, diesel, nextClack: 0, fadeTimer: null };
     if (!diesel) {
       v.whine = node(OscillatorNode, { type: 'sawtooth', frequency: 300 });
@@ -553,7 +570,9 @@ class RouteSynth {
       v.whineGain = node(GainNode, { gain: 0 });
       v.whine.connect(v.whineBP).connect(v.whineGain).connect(pan);
       v.whine.start();
+      kRate(v.whine.frequency, v.whineBP.frequency, v.whineGain.gain);
     }
+    kRate(out.gain, space.gain, pan.pan, reverbSend.gain, body.frequency, roar.gain);
     return v;
   }
 
@@ -674,6 +693,7 @@ class RouteSynth {
     });
     const lfoDepth = node(GainNode, { gain: 0 }); // fed by a shared tremolo LFO (see updateNearby)
     lfoDepth.connect(amp.gain);
+    kRate(space.gain, reverbSend.gain, pan.pan, filter.frequency, filter.Q, drive.gain, makeup.gain, ...oscs.flatMap(o => [o.frequency, o.detune]));
     return { space, pan, reverbSend, filter, drive, makeup, lfoDepth, band: null, oscs, cents: (Math.random() - 0.5) * 16, fadeTimer: null };
   }
 
@@ -707,6 +727,7 @@ class RouteSynth {
       return o;
     });
     lfo.start();
+    kRate(space.gain, reverbSend.gain, glitchSend.gain, pan.pan, wah.frequency, ...oscs.flatMap(o => [o.frequency, o.detune]));
     return { space, pan, reverbSend, glitchSend, wahDepth, lfo, oscs, freq, nextBubble: 0, fadeTimer: null };
   }
 

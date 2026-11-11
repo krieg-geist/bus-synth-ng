@@ -43,7 +43,7 @@ class GranularProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const out = outputs[0];
     const n = out[0].length;
-    const p = {};
+    const p = this.p ??= {}; // reused: allocating per block (375 a second) invites GC pauses on the audio thread
     for (const k in parameters) p[k] = parameters[k][0];
     const inL = input[0], inR = input[1] || input[0];
     const [bufL, bufR] = this.buf;
@@ -73,7 +73,11 @@ class GranularProcessor extends AudioWorkletProcessor {
       out[0][i] = l * 0.5;
       if (out[1]) out[1][i] = r * 0.5;
     }
-    this.grains = this.grains.filter(g => g.age < g.len);
+    if (this.grains.length) { // drop finished grains in place
+      let live = 0;
+      for (const g of this.grains) if (g.age < g.len) this.grains[live++] = g;
+      this.grains.length = live;
+    }
     return true;
   }
 }

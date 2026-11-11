@@ -99,11 +99,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
     position: absolute; left: -5px; top: -5px; width: 10px; height: 10px;
     border: 1.5px solid rgba(255, 255, 255, 0.55); border-radius: 50%;
 }
-.reticle-label {
-    position: absolute; left: 10px; top: 8px; white-space: nowrap;
-    font-size: 10.5px; color: rgba(255, 255, 255, 0.5);
-    opacity: var(--closeup, 0); transition: opacity 0.4s;
-}
 
 /* ---------- Floating chrome ---------- */
 

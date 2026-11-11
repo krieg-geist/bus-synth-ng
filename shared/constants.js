@@ -15,7 +15,7 @@ const SHARED_CONSTANTS = {
     UPDATES_TTL_MS: 8000,      // 8 seconds: arrivals must reach clients inside the 60 s display lag
     
     // Historical cache settings
-    HISTORICAL_MAX_AGE_MS: 90000,      // 90 seconds
+    HISTORICAL_MAX_AGE_MS: 180000,     // 3 minutes of polls sent to a new client, so routes and trails show at once
     HISTORICAL_CLEANUP_INTERVAL_MS: 30000,  // 30 seconds
     HISTORICAL_MAX_ENTRIES: 50         // Safety limit
   },
@@ -30,8 +30,6 @@ const SHARED_CONSTANTS = {
     TIMING: {
       DISPLAY_LAG_MS: 60000,      // 1 minute lag
       MAX_HISTORY_AGE_MS: 480000, // 8 minutes of history (trails)
-      HISTORICAL_SPREAD_MS: 90000, // Spread historical data over 90s
-      HISTORICAL_INTERVAL_MS: 10000, // 10s between historical entries
       STALE_VEHICLE_MS: 300000,  // a vehicle silent this long is removed; shorter gaps just continue
       MAX_TIME_GAP_MS: 30000      // Max gap before clearing trails (30s)
     },

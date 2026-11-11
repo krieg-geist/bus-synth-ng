@@ -73,7 +73,7 @@ backend/
 ├── server.js            # Express (frontend, /api/stops, /js/constants.js) + WebSocket broadcast every 10 s
 ├── metlink-client.js    # Metlink Open Data API
 ├── cache.js             # TTL cache, serves stale data on API errors
-└── historical-cache.js  # Last 90 s of updates, sent to new clients for an instant start
+└── historical-cache.js  # Last 3 min of updates, sent to new clients for an instant start
 
 frontend/
 ├── index.html / style.css

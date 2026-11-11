@@ -46,7 +46,6 @@ class BusSynthApp {
     this.routesCount = document.getElementById('routes-count');
     this.arrivalsCount = document.getElementById('arrivals-count');
     this.delaysCount = document.getElementById('delays-count');
-    this.reticle = document.getElementById('reticle');
 
     this.activeRoutesDisplay = document.getElementById('active-routes');
     this.recentArrivalsDisplay = document.getElementById('recent-arrivals');
@@ -152,9 +151,7 @@ class BusSynthApp {
       this.mapManager.map.on('move', () => {
         this.moveTimer ??= setTimeout(() => { this.moveTimer = null; this.updateRouteStates(); }, 120);
       });
-      this.mapManager.map.on('move zoom resize', () => this.updateReticle());
       this.audio.setModes(this.modes);
-      this.updateReticle();
 
       this.wsClient = new WebSocketClient();
       this.wsClient.onMessage = (data) => this.handleWebSocketMessage(data);
@@ -242,13 +239,13 @@ class BusSynthApp {
 
   handleWebSocketMessage(data) {
     if (data.type === 'bus_update') {
-      this.processBusUpdate(data.buses, data.isHistorical);
+      this.processBusUpdate(data.buses, data.isHistorical, data.age);
       this.processTripUpdates(data.updates);
     }
   }
 
-  processBusUpdate(buses, isHistorical = false) {
-    this.mapManager.updateBuses(buses, isHistorical);
+  processBusUpdate(buses, isHistorical = false, age = 0) {
+    this.mapManager.updateBuses(buses, isHistorical, age);
 
     const lag = SHARED_CONSTANTS.MAP.TIMING.DISPLAY_LAG_MS;
     buses.forEach(bus => {
@@ -326,7 +323,6 @@ class BusSynthApp {
   updateRouteStates() {
     if (!this.mapManager) return;
     this.listenerPos = this.listener();
-    this.updateReticle();
     const overview = Utils.overviewWeight(this.listenerPos.radius);
     const routes = this.mapManager.getCurrentLaggedRouteData();
     const now = Date.now();
@@ -506,12 +502,6 @@ class BusSynthApp {
     if (type === 2) return LINE_COLORS[route] || '#fbbf24';
     if (type === 4) return FERRY_COLOR;
     return NOTE_COLORS[routeDegree(route, this.modes.pitch) % NOTE_COLORS.length]; // colour = scale degree
-  }
-
-  // Crosshair at the screen centre, where you listen from; "every bus" fades in with close-up mode
-  updateReticle() {
-    if (!this.mapManager?.map) return;
-    this.reticle.style.setProperty('--closeup', closeUpAt(this.listener().edge).toFixed(2));
   }
 
   updateCounts() {
