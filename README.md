@@ -1,6 +1,10 @@
 # Metlink Synth
 
-Wellington's buses, trains and ferries, live, played as music. Every busy bus route hums its own note and plucks one at each stop; trains whine, clack and buzz into stations; ferries glop. Late routes go sour, routes sharing a road bend each other's sound, and a vehicle turning around at the end of its route glitches. Zoom the map in to listen closer.
+**Runs entirely on [Metlink Open Data](https://opendata.metlink.org.nz/)**, Metlink's (Greater Wellington Regional Council) public transport API: realtime vehicle positions, trip updates and the GTFS timetable. No feed, no noise. Keys are free.
+
+Live transit data for the Wellington region, turned into a somewhat unpleasant generative soundscape. Every busy bus route drones on its own note and plucks one at each stop. Trains whine, clack and buzz into stations. Ferries glorp. Late routes go sour, routes sharing a road mess with each other's sound, and a vehicle turning around at the end of the line glitches out. Zoom in to listen closer.
+
+Weird noises, data and civic infrastructure, with the sound and the visuals coming straight from the same source. It's built on an app I wrote ages ago, and the UI was brutally disciplined into shape by Claude. No rights reserved: do whatever the hell you want with it.
 
 ## Quick Start
 

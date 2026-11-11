@@ -239,6 +239,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .swatch-ferry { width: 16px; height: 8px; border-radius: 8px 8px 3px 3px; background: var(--ferry); }
 .swatch-arrival { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text); }
 .swatch-turn { width: 9px; height: 9px; border: 1.5px dashed var(--text); }
+.swatch-why { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
 
 .tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); margin-bottom: 6px; }
 .tab-btn {
