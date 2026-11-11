@@ -1,4 +1,3 @@
-// Shared utility functions
 
 // Constants
 const EARTH_RADIUS_METERS = 6371000;
@@ -12,7 +11,6 @@ const EARTH_RADIUS_METERS = 6371000;
  * @returns {number} Distance in meters
  */
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    // Haversine formula for accurate geodetic distance
     const R = EARTH_RADIUS_METERS;
     const φ1 = lat1 * Math.PI / 180;
     const φ2 = lat2 * Math.PI / 180;
@@ -24,7 +22,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
               Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-    return R * c; // Distance in meters
+    return R * c;
 }
 
 // Realtime route_id -> public route name (20 -> "2", 2 -> "KPL"). Stripping the trailing zero instead
@@ -69,11 +67,16 @@ function vehicleRoute(vehicle) {
     return routeName(routeId);
 }
 
-let typeByName = null;
+let metaByName = null;
+// Route metadata by route name: { name, type, km, n (stops per trip), stops (ferries) }
+function routeMeta(name) {
+    metaByName ??= Object.fromEntries(Object.values(window.ROUTE_META || {}).map(m => [m.name, m]));
+    return metaByName[name];
+}
+
 // GTFS route_type for a route name (2 rail, 3 bus, 4 ferry, 5 cable car, 712 school)
 function routeType(name) {
-    typeByName ??= Object.fromEntries(Object.values(window.ROUTE_META || {}).map(m => [m.name, m.type]));
-    return typeByName[name] ?? 3;
+    return routeMeta(name)?.type ?? 3;
 }
 
 /**
@@ -81,32 +84,39 @@ function routeType(name) {
  * Zoomed in, sounds pan by direction and fade with distance. Zoomed out past ~25 km the view is the
  * whole region, so it falls back to rankPan (spreads the dense city evenly) with no distance cue.
  * local is the unblended distance cue, for sounds that should only exist when zoomed in.
- * @param {{lat:number, lon:number, radius:number, hear?:number}} listener - radius: view half-diagonal (m);
- *   hear: distance at which sound is at half strength (m), drawn as the crosshair ring
+ * @param {{lat:number, lon:number, radius:number, hw?:number, hh?:number}} listener - radius: view half-diagonal (m);
+ *   hw, hh: half the view's width and height (m). The falloff has the screen's shape: sound fades towards its edges.
  */
 // 0 zoomed in (view radius <= 5 km) .. 1 zoomed out to the region (>= 25 km); everything zoom-dependent blends on this
 function overviewWeight(radius) {
     return Math.max(0, Math.min(1, (radius - 5000) / 20000));
 }
 
-function spatial(lat, lon, listener, rankPan) {
-    if (lat == null || lon == null) return { pan: 0, near: 0.5, local: 0 };
+// Offset from the listener in metres (dx east, dy north), and e: distance in screen units, 1 at the middle of each edge
+function viewOffset(lat, lon, listener) {
     const dx = (lon - listener.lon) * 111320 * Math.cos(listener.lat * Math.PI / 180);
     const dy = (lat - listener.lat) * 110540;
-    const hear = listener.hear ?? 0.4 * listener.radius;
-    const localPan = dx / Math.sqrt(dx * dx + (0.75 * hear) ** 2);
-    const localNear = 1 / (1 + (dx * dx + dy * dy) / hear ** 2);
+    const hw = listener.hw ?? 0.7 * listener.radius, hh = listener.hh ?? 0.7 * listener.radius;
+    return { dx, dy, hw, hh, e: Math.hypot(dx / hw, dy / hh) };
+}
+
+function spatial(lat, lon, listener, rankPan) {
+    if (lat == null || lon == null) return { pan: 0, near: 0.5, local: 0 };
+    const { dx, hw, e } = viewOffset(lat, lon, listener);
+    const localPan = dx / Math.sqrt(dx * dx + (0.6 * hw) ** 2); // ~0.86 at the screen's side edge
+    const localNear = 1 / (1 + (e / 0.7) ** 2); // half strength 70% of the way to the edge, a third at the edge
     const w = overviewWeight(listener.radius);
     return { pan: localPan + (rankPan - localPan) * w, near: localNear + (1 - localNear) * w, local: localNear * (1 - w) };
 }
 
-// Export for use in other modules
 window.Utils = {
     calculateDistance,
     routeName,
     vehicleRoute,
     routeType,
+    routeMeta,
     newArrivals,
     spatial,
+    viewOffset,
     overviewWeight
 };

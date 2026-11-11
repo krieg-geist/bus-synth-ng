@@ -5,27 +5,44 @@
 //                              rail-joint clacks at real speed, a low electric buzz at stations; Wairarapa is a diesel rumble.
 //   ferry                    - per boat: a low hull tone with watery vibrato through a swept band-pass, plus bubbles;
 //                              docking at a wharf drops big gloops and smears the boat through the granular bus.
+// Close-up mode (under ~4 km from the screen centre to its nearest edge): every bus on screen gets its own voice,
+// panned by its direction from the crosshair, pitched by its heading, filtered by its speed, roughened by its own lateness; the route drones
+// shrink to a calmer background bed.
 // Plus a traffic noise bed (only when zoomed in), a reverb every source sends into by distance, and a glitch bus
-// that stays silent until a vehicle turns around at the end of its route: that route is then replayed for a
-// few seconds as reversed, stuttering grains (size from city speed, feedback from city lateness).
+// that stays silent until a vehicle turns around at the end of its route or a ferry docks: that sound is then
+// replayed for a few seconds as reversed, stuttering grains (size from city speed, feedback from city lateness).
 // Sound is placed relative to the map view (see Utils.spatial). The cable car never reports, so it is silent.
 // Two time scales: where the camera is (level, pan, reverb send, tone) follows within SPACE seconds; the data
 // (bus counts, delay, speed) changes every 10-20 s and glides over seconds so it doesn't pulse with the feed.
-// Switches: pitch 'length' (longer route = lower) | 'family' (route-number family = chord tone);
-//           drone 'emergent' (routes with 3+ buses, up to 24) | 'top8' (8 busiest; plucks become bells).
+// Switches: pitch 'length' (longer route = lower) | 'family' (route-number family = chord tone); scale (see SCALES);
+//           drone 'emergent' (routes with 2+ buses, busiest near you, up to MAX_DRONES) | 'top8' (8 busiest; plucks become bells).
 
 const ROOT_HZ = 73.42; // D2
-const SCALE = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3]; // just-intonation major pentatonic: any mix stays consonant
+// Scales as frequency ratios within an octave above D. Pentatonic (the default) keeps any mix consonant.
+const SCALES = {
+  pentatonic: [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3], // just major pentatonic
+  minor: [1, 6 / 5, 4 / 3, 3 / 2, 9 / 5], // just minor pentatonic
+  dorian: [1, 9 / 8, 6 / 5, 4 / 3, 3 / 2, 5 / 3, 9 / 5],
+  lydian: [1, 9 / 8, 5 / 4, 45 / 32, 3 / 2, 5 / 3, 15 / 8],
+  hirajoshi: [1, 9 / 8, 6 / 5, 3 / 2, 8 / 5],
+  harmonic: [1, 9 / 8, 5 / 4, 11 / 8, 3 / 2, 13 / 8, 7 / 4, 15 / 8], // partials 8 to 15
+  wholetone: [0, 2, 4, 6, 8, 10].map(st => 2 ** (st / 12)),
+  chromatic: Array.from({ length: 12 }, (_, st) => 2 ** (st / 12)) // anything goes
+};
+let SCALE = SCALES.pentatonic; // the current scale; set through RouteSynth.setModes({ scale })
 const MAX_NOTES = 48; // cap on overlapping notes
 const TOP_N = 8;
 const SPACE = 0.35; // seconds for camera-driven changes
-const MAX_DRONES = 24; // render cost: at peak hour 32 drones + trains only rendered 2.4x faster than real time
+const MAX_DRONES = 32; // route drones when zoomed out (with these budgets a peak-hour offline render runs ~2.3x real time)
+const MIX_TRIM = { bus: 1, train: 0.36, ferry: 1, arrival: 1 }; // fader 100% = this gain; trains = the old 60% (-9 dB)
+const BED_VOICES = 8; // route drones kept as background in close-up mode
+const NEAR_VOICES = 36; // per-bus voices in close-up mode; past this the furthest are dropped
 const NOTE_GAIN = 0.12;
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 const META_BY_NAME = Object.fromEntries(Object.values(window.ROUTE_META || {}).map(m => [m.name, m]));
 const metaFor = route => META_BY_NAME[route] || { name: route, type: 3, km: null };
-const scaleStep = i => ROOT_HZ * 2 ** Math.floor(i / 5) * SCALE[((i % 5) + 5) % 5];
+const scaleStep = i => ROOT_HZ * 2 ** Math.floor(i / SCALE.length) * SCALE[((i % SCALE.length) + SCALE.length) % SCALE.length];
 const clamp01 = x => Math.max(0, Math.min(1, x));
 // One distance curve for every source, so zooming treats buses, trains and notes alike
 const presence = pos => 0.35 + 0.65 * pos.near;    // direct level: far is -9 dB, so zooming focuses rather than mutes
@@ -56,16 +73,23 @@ const FAMILY = {
   north: { deg: [1, 4], oct: 2 }, special: { deg: [4], oct: 3 }
 };
 
-function routePitch(route, mode) {
+// Which step of the current scale a route sits on (counting up from D2). Length: longer route = lower, spread over
+// about 4.2 octaves. Family: each area's chord tones (written for the 5-note scale, scaled to the current one).
+function routeStep(route, mode) {
   const m = metaFor(route);
   const km = m.km ?? 15;
+  const n = SCALE.length;
   if (mode === 'family') {
     const f = FAMILY[family(m)];
     const oct = f.oct + (km < 8 ? 1 : km > 30 ? -1 : 0);
-    return scaleStep(oct * 5 + f.deg[hash(route) % f.deg.length]);
+    return oct * n + Math.round(f.deg[hash(route) % f.deg.length] * n / 5);
   }
   const p = Math.log(Math.max(2, Math.min(100, km)) / 2) / Math.log(50); // 2 km -> 0, 100 km -> 1
-  return scaleStep(Math.round((1 - p) * 21));
+  return Math.round((1 - p) * 4.2 * n);
+}
+
+function routePitch(route, mode) {
+  return scaleStep(routeStep(route, mode));
 }
 
 function noiseBuffer(ctx, secs) {
@@ -120,10 +144,13 @@ const BUZZ_CURVE = Float32Array.from({ length: 1024 }, (_, i) => Math.tanh(5 * (
 class RouteSynth {
   constructor({ place }) {
     this.place = place; // (lat, lon) -> { pan, near, local }
-    this.modes = { pitch: 'length', drone: 'emergent' };
+    this.modes = { pitch: 'length', drone: 'emergent', scale: 'pentatonic' };
     this.voices = new Map(); // bus route -> drone voice
     this.trains = new Map(); // vehicle id -> train voice
     this.ferries = new Map(); // vehicle id -> ferry voice
+    this.near = new Map(); // vehicle id -> close-up bus voice
+    this.closeUp = 0; // 0..1, how far into close-up mode
+    this.levels = { bus: 1, train: 1, ferry: 1, arrival: 1 }; // user mix from the settings sliders, linear gain
     this.states = new Map(); // route -> latest state from app
     this.ctx = null;
     this.activeNotes = 0;
@@ -164,16 +191,43 @@ class RouteSynth {
       glitchOut.connect(node(GainNode, { gain: 0.3 })).connect(this.reverbIn);
     }
 
+    // User mix (settings sliders): a dry and a reverb stage per sound type, so a fader takes its reverb with it
+    this.mix = Object.fromEntries(Object.entries(this.levels).map(([type, g]) => {
+      const dry = node(GainNode, { gain: g * MIX_TRIM[type] }), wet = node(GainNode, { gain: g * MIX_TRIM[type] });
+      dry.connect(this.mixBus);
+      wet.connect(this.reverbIn);
+      return [type, { dry, wet }];
+    }));
+
     this.droneBus = node(GainNode, { gain: 0.3 });
-    this.droneBus.connect(this.mixBus);
+    this.droneBus.connect(this.mix.bus.dry);
     this.droneSend = node(GainNode, { gain: 0.3 });
-    this.droneSend.connect(this.reverbIn);
+    this.droneSend.connect(this.mix.bus.wet);
     this.noteBus = node(GainNode);
-    this.noteBus.connect(this.mixBus);
+    this.noteBus.connect(this.mix.arrival.dry);
     this.trainBus = node(GainNode, { gain: 0.8 });
-    this.trainBus.connect(this.mixBus);
+    this.trainBus.connect(this.mix.train.dry);
+    // Train grit: a parallel drive -> clip -> 5-bit crush, highpassed so the low end stays clean (see updateTrains)
+    this.trainGrit = node(GainNode, { gain: 0 });
+    this.trainBus.connect(this.trainGrit).connect(node(WaveShaperNode, { curve: BUZZ_CURVE }))
+      .connect(node(WaveShaperNode, { curve: crushCurve(5) })).connect(node(BiquadFilterNode, { type: 'highpass', frequency: 250 }))
+      .connect(node(GainNode, { gain: 0.18 })).connect(this.mix.train.dry);
     this.ferryBus = node(GainNode, { gain: 0.5 });
-    this.ferryBus.connect(this.mixBus);
+    this.ferryBus.connect(this.mix.ferry.dry);
+    this.nearBus = node(GainNode, { gain: 0.1 });
+    this.nearBus.connect(this.mix.bus.dry);
+    // Shared LFOs, one per speed band, instead of one oscillator per voice: slow sway for the route drones,
+    // faster tremolo for the close-up voices
+    this.swayBank = [0.12, 0.35, 0.7, 1.2].map(frequency => {
+      const o = node(OscillatorNode, { frequency });
+      o.start();
+      return o;
+    });
+    this.tremolo = [0.4, 0.9, 1.8, 3.2].map(frequency => {
+      const o = node(OscillatorNode, { frequency });
+      o.start();
+      return o;
+    });
     this.clack = clackBuffer(ctx);
     this.glitchUntil = 0;
 
@@ -189,8 +243,8 @@ class RouteSynth {
     const trafficPan = node(StereoPannerNode);
     noise.connect(node(BiquadFilterNode, { type: 'lowpass', frequency: 120, Q: 1 })).connect(throb).connect(rumble).connect(trafficPan);
     noise.connect(whooshBP).connect(whoosh).connect(trafficPan);
-    trafficPan.connect(this.mixBus);
-    trafficPan.connect(node(GainNode, { gain: 0.4 })).connect(this.reverbIn);
+    trafficPan.connect(this.mix.bus.dry);
+    trafficPan.connect(node(GainNode, { gain: 0.4 })).connect(this.mix.bus.wet);
     noise.start();
     throbOsc.start();
     this.traffic = { rumble, whoosh, whooshBP, pan: trafficPan };
@@ -202,10 +256,11 @@ class RouteSynth {
   stop() {
     const ctx = this.ctx;
     this.ctx = null;
-    [...this.voices.values(), ...this.trains.values(), ...this.ferries.values()].forEach(v => clearTimeout(v.fadeTimer));
+    [...this.voices.values(), ...this.trains.values(), ...this.ferries.values(), ...this.near.values()].forEach(v => clearTimeout(v.fadeTimer));
     this.voices.clear();
     this.trains.clear();
     this.ferries.clear();
+    this.near.clear();
     ctx?.close(); // frees every node at once
   }
 
@@ -213,8 +268,16 @@ class RouteSynth {
     if (this.ctx) glide(this.master.gain, v, 0.05, this.ctx.currentTime, 0);
   }
 
+  // type: 'bus' | 'train' | 'ferry' | 'arrival'; g: linear gain (1 = as designed)
+  setLevel(type, g) {
+    this.levels[type] = g;
+    const m = this.ctx && this.mix[type];
+    if (m) [m.dry, m.wet].forEach(stage => glide(stage.gain, g * MIX_TRIM[type], 0.05, this.ctx.currentTime, 0));
+  }
+
   setModes(modes) {
     Object.assign(this.modes, modes);
+    SCALE = SCALES[this.modes.scale] || SCALES.pentatonic;
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     this.voices.forEach((v, route) => { // glide drones to their new pitch
@@ -242,9 +305,11 @@ class RouteSynth {
     if (!ctx) return;
     if (ctx.state === 'suspended') ctx.resume();
     const now = ctx.currentTime;
+    this.closeUp = frame.closeUp ?? 0;
     this.updateDrones(frame.routes, now);
     this.updateTrains(frame.trains, now, 1 - (frame.zoom ?? 1));
     this.updateFerries(frame.ferries || [], now);
+    this.updateNearby(frame.nearby || [], now);
 
     // Zoom colours the whole mix, subtly: 5 kHz and clean zoomed out, ~16 kHz with a touch of drive at street level
     const close = 1 - (frame.zoom ?? 1);
@@ -253,7 +318,7 @@ class RouteSynth {
     glide(this.drive.gain, drive, SPACE, now, 0.01);
     glide(this.makeup.gain, 1 / drive, SPACE, now, 0.01);
 
-    // Same idea for the plucks: zoomed in, most arrivals are far away and quiet, so lift the note bus
+    // Plucks: zoomed in, most arrivals are far away and quiet, so lift the note bus
     // by how present routes are on average. The level stays put; the balance shifts towards what's near.
     let sum = 0, count = 0;
     frame.routes.forEach(s => { sum += presence(this.place(s.lat, s.lon)); count++; });
@@ -290,14 +355,17 @@ class RouteSynth {
       scored.push({ route, s, pos, score: this.holdFor(s.n) * presence(pos) * (live && !live.fadeTimer ? 1.25 : 1) });
     });
     scored.sort((a, b) => b.score - a.score);
-    const wanted = new Map(scored.slice(0, this.modes.drone === 'top8' ? TOP_N : MAX_DRONES).map(d => [d.route, d]));
+    // Close up, most of the budget goes to per-bus voices and the route drones shrink to a background bed
+    const count = this.modes.drone === 'top8' ? TOP_N : Math.round(MAX_DRONES - (MAX_DRONES - BED_VOICES) * this.closeUp);
+    const wanted = new Map(scored.slice(0, count).map(d => [d.route, d]));
+    const calm = 1 - 0.75 * this.closeUp; // close up, the roughness moves from the route drones to the per-bus voices
 
     this.voices.forEach((v, route) => {
       if (wanted.has(route) || v.fadeTimer) return;
       glide(v.out.gain, 0, 1.5, now, 0);
       v.fadeTimer = setTimeout(() => {
         v.oscs.forEach(o => o.stop());
-        v.lfo.stop();
+        if (v.band != null) this.swayBank[v.band].disconnect(v.lfoDepth); // or the shared LFO keeps it alive
         v.space.disconnect();
         this.voices.delete(route);
       }, 2000);
@@ -322,8 +390,8 @@ class RouteSynth {
       // 8 s glides: delay and speed step on the feed's clock, this keeps them from pulsing with it.
       const late = clamp01((s.delay - 60) / 540);
       const early = clamp01((-s.delay - 60) / 240);
-      const centre = -30 * late + 12 * early;
-      const spread = 4 + 24 * late + 10 * Math.min(s.bunched, 3);
+      const centre = (-30 * late + 12 * early) * calm;
+      const spread = 4 + (24 * late + 10 * Math.min(s.bunched, 3)) * calm;
       glide(v.oscs[0].detune, centre - spread / 2, 8, now, 0.5);
       glide(v.oscs[1].detune, centre + spread / 2, 8, now, 0.5);
 
@@ -331,9 +399,13 @@ class RouteSynth {
       const move = clamp01(s.kmh / 40);
       const cutoff = v.freq * (1.5 + 4 * move);
       glide(v.filter.frequency, cutoff, 8, now, cutoff * 0.03);
-      glide(v.lfo.frequency, 0.08 + 1.2 * move, 6, now, 0.02);
+      const band = Math.min(3, Math.floor(move * 4));
+      if (v.band !== band) {
+        if (v.band != null) this.swayBank[v.band].disconnect(v.lfoDepth);
+        this.swayBank[band].connect(v.lfoDepth);
+        v.band = band;
+      }
       glide(v.lfoDepth.gain, v.hold * 0.35 * move, 4, now, 0.005);
-      glide(v.panWobble.gain, 0.12 * move, 4, now, 0.01);
     });
 
     // Routes sharing road right now cross-modulate: each drone's FM comes from its busiest corridor partner.
@@ -344,14 +416,16 @@ class RouteSynth {
       if (p !== v.fmSrc) {
         try { v.fmSrc?.oscs[0].disconnect(v.fmIn); } catch { /* source already gone */ }
         p?.oscs[0].connect(v.fmIn);
+        if (p && !v.fmSrc) v.fmDelay.connect(v.oscs[0].frequency);
+        if (!p && v.fmSrc) v.fmDelay.disconnect();
         v.fmSrc = p;
       }
-      glide(v.fmIn.gain, p ? v.freq * Math.min(0.5, 0.1 * s.contact) : 0, 6, now, 0.5);
+      glide(v.fmIn.gain, p ? v.freq * Math.min(0.5, 0.1 * s.contact) * calm : 0, 2, now, 0.5);
     });
 
     // Normalise by total presence, not voice count: zooming in shifts the balance to nearby routes
     // instead of making the whole drone quieter. Follows the camera.
-    const norm = 0.18 / Math.sqrt(Math.max(0.25, energy));
+    const norm = (0.18 / Math.sqrt(Math.max(0.25, energy))) * (1 - 0.45 * this.closeUp); // close up, the bed sits ~5 dB back
     glide(this.droneBus.gain, norm, SPACE, now, 0.005);
     glide(this.droneSend.gain, norm, SPACE, now, 0.005);
   }
@@ -372,23 +446,20 @@ class RouteSynth {
     pan.connect(out);
     const filter = node(BiquadFilterNode, { type: 'lowpass', frequency: freq * 3, Q: 0.7 });
     filter.connect(pan);
+    // Corridor FM goes into one oscillator, and only while there's a partner (see updateDrones): an audio-rate
+    // frequency input is the expensive path, so idle voices don't pay for it
     const fmIn = node(GainNode, { gain: 0 });
     const fmDelay = node(DelayNode, { delayTime: 0.003 });
     fmIn.connect(fmDelay);
     const oscs = [0, 1].map(() => {
       const o = node(OscillatorNode, { type: 'sawtooth', frequency: freq });
-      fmDelay.connect(o.frequency);
       o.connect(filter);
       o.start();
       return o;
     });
-    const lfo = node(OscillatorNode, { frequency: 0.1 });
-    const lfoDepth = node(GainNode, { gain: 0 });
-    const panWobble = node(GainNode, { gain: 0 });
-    lfo.connect(lfoDepth).connect(out.gain);
-    lfo.connect(panWobble).connect(pan.pan);
-    lfo.start();
-    return { out, space, pan, filter, oscs, fmIn, fmSrc: null, lfo, lfoDepth, panWobble, reverbSend, glitchSend, freq, hold: 0, fadeTimer: null };
+    const lfoDepth = node(GainNode, { gain: 0 }); // fed by a shared sway LFO (see updateDrones)
+    lfoDepth.connect(out.gain);
+    return { out, space, pan, filter, oscs, fmIn, fmDelay, fmSrc: null, lfoDepth, band: null, reverbSend, glitchSend, freq, hold: 0, fadeTimer: null };
   }
 
   // zoomedIn: 0 at region view .. 1 at street level; trains come forward and get rougher as you zoom in
@@ -436,7 +507,9 @@ class RouteSynth {
     // unnormalised, 15 whining trains were 10 dB louder than every bus drone together
     let energy = 0;
     this.trains.forEach(v => { if (!v.fadeTimer) energy += ((v.out.gain._target ?? 0) * (v.space.gain._target ?? 0)) ** 2; });
-    glide(this.trainBus.gain, (0.15 / Math.sqrt(Math.max(0.25, energy))) * (1 + 0.8 * zoomedIn), SPACE, now, 0.005); // ~+5 dB at street level
+    // Zoomed out trains sit ~2 dB under where they were; zoomed in they come up to the same level as before (~+9 dB)
+    glide(this.trainBus.gain, (0.12 / Math.sqrt(Math.max(0.25, energy))) * (1 + 1.875 * zoomedIn), SPACE, now, 0.005);
+    glide(this.trainGrit.gain, 6 * zoomedIn * zoomedIn, SPACE, now, 0.01); // parallel crunch, only zoomed in
 
     this.trains.forEach((v, id) => {
       if (seen.has(id) || v.fadeTimer) return;
@@ -458,7 +531,7 @@ class RouteSynth {
     const space = node(GainNode, { gain: 0 }); // camera stage
     space.connect(this.trainBus);
     const reverbSend = node(GainNode, { gain: 0 });
-    space.connect(reverbSend).connect(this.reverbIn);
+    space.connect(reverbSend).connect(this.mix.train.wet);
     const out = node(GainNode, { gain: 0 }); // data stage: louder when moving
     out.connect(space);
     const pan = node(StereoPannerNode);
@@ -519,6 +592,91 @@ class RouteSynth {
     });
   }
 
+  // Close-up mode: one voice per bus on screen, so you can pick them apart. Pan: its direction from the
+  // crosshair. Pitch: its route's note bent by its heading (see below), plus a few cents of its own.
+  // Speed opens its filter and sets its tremolo; stopped buses go dull. Level: closeness. Its own lateness flattens it, makes its
+  // two oscillators beat and drives it into a soft clip: this is where the roughness lives once you're close.
+  updateNearby(vehicles, now) {
+    vehicles = vehicles.slice(0, NEAR_VOICES); // nearest first, so over budget the furthest drop out
+    const seen = new Set();
+    for (const b of vehicles) {
+      seen.add(b.id);
+      let v = this.near.get(b.id);
+      if (!v) this.near.set(b.id, v = this.makeNearVoice(b));
+      if (v.fadeTimer) { clearTimeout(v.fadeTimer); v.fadeTimer = null; }
+      const pos = this.place(b.lat, b.lon);
+      // Heading bends the pitch continuously, +-2 semitones: east up, west down, north and south on the route's note,
+      // so there's no jump anywhere round the compass. Heading comes from 20 s of movement; the bend glides over 4 s.
+      const bend = b.heading == null ? 0 : 2 * Math.sin(b.heading * Math.PI / 180);
+      const f = routePitch(b.route, this.modes.pitch) * 2 ** (bend / 12);
+      const late = clamp01((b.delay - 60) / 540);
+      const early = clamp01((-b.delay - 60) / 240);
+      const centre = v.cents - 30 * late + 12 * early;
+      const spread = 3 + 30 * late;
+      v.oscs.forEach((o, i) => {
+        glide(o.frequency, f, 4, now, 0.5); // a turn is a slow portamento
+        glide(o.detune, centre + (i ? 0.5 : -0.5) * spread, 6, now, 0.5);
+      });
+      const drive = 0.03 + 0.25 * late;
+      glide(v.drive.gain, drive, 6, now, 0.002);
+      glide(v.makeup.gain, 0.1 / drive, 6, now, 0.01);
+      const move = clamp01((b.kmh ?? 0) / 40);
+      glide(v.filter.frequency, Math.min(12000, f * (1.5 + 10 * move)), 8, now, 20); // stopped: near sine; 40 km/h: bright
+      glide(v.filter.Q, 0.7 + 2.5 * move, 8, now, 0.05);
+      const band = Math.min(3, Math.floor(move * 4));
+      if (v.band !== band) {
+        if (v.band != null) this.tremolo[v.band].disconnect(v.lfoDepth);
+        this.tremolo[band].connect(v.lfoDepth);
+        v.band = band;
+      }
+      glide(v.lfoDepth.gain, 0.3 * move, 4, now, 0.01);
+      glide(v.space.gain, this.closeUp * presence(pos), SPACE, now, 0.01);
+      glide(v.pan.pan, pos.pan, SPACE, now, 0.02);
+      glide(v.reverbSend.gain, 0.6 * wetness(pos), SPACE, now, 0.02);
+    }
+    this.near.forEach((v, id) => {
+      if (seen.has(id) || v.fadeTimer) return;
+      glide(v.space.gain, 0, 1, now, 0);
+      v.fadeTimer = setTimeout(() => {
+        v.oscs.forEach(o => o.stop());
+        if (v.band != null) this.tremolo[v.band].disconnect(v.lfoDepth); // or the shared LFO keeps it alive
+        v.space.disconnect();
+        this.near.delete(id);
+      }, 1500);
+    });
+    glide(this.nearBus.gain, 0.16 / Math.sqrt(Math.max(1, vehicles.length)), SPACE, now, 0.005);
+  }
+
+  // Two triangles -> lowpass -> drive into a soft clip -> makeup -> tremolo amp -> pan -> camera stage
+  makeNearVoice(b) {
+    const ctx = this.ctx;
+    const node = (Type, opts) => new Type(ctx, opts);
+    const f = routePitch(b.route, this.modes.pitch);
+    const space = node(GainNode, { gain: 0 });
+    space.connect(this.nearBus);
+    const reverbSend = node(GainNode, { gain: 0 });
+    space.connect(reverbSend).connect(this.mix.bus.wet);
+    const pan = node(StereoPannerNode);
+    pan.connect(space);
+    const amp = node(GainNode, { gain: 0.6 });
+    amp.connect(pan);
+    const makeup = node(GainNode, { gain: 3 });
+    makeup.connect(amp);
+    const drive = node(GainNode, { gain: 0.03 });
+    drive.connect(node(WaveShaperNode, { curve: BUZZ_CURVE })).connect(makeup);
+    const filter = node(BiquadFilterNode, { type: 'lowpass', frequency: 1.5 * f, Q: 0.7 }); // speed opens it (see updateNearby)
+    filter.connect(drive);
+    const oscs = [0, 1].map(() => {
+      const o = node(OscillatorNode, { type: 'triangle', frequency: f });
+      o.connect(filter);
+      o.start();
+      return o;
+    });
+    const lfoDepth = node(GainNode, { gain: 0 }); // fed by a shared tremolo LFO (see updateNearby)
+    lfoDepth.connect(amp.gain);
+    return { space, pan, reverbSend, filter, drive, makeup, lfoDepth, band: null, oscs, cents: (Math.random() - 0.5) * 16, fadeTimer: null };
+  }
+
   // Ferry: a low hull tone (two triangles a hair apart, slow vibrato) through a resonant band-pass that an LFO sweeps
   // up and down: the glop
   makeFerry(f) {
@@ -529,7 +687,7 @@ class RouteSynth {
     const space = node(GainNode, { gain: 0 });
     space.connect(this.ferryBus);
     const reverbSend = node(GainNode, { gain: 0 });
-    space.connect(reverbSend).connect(this.reverbIn);
+    space.connect(reverbSend).connect(this.mix.ferry.wet);
     const glitchSend = node(GainNode, { gain: 0 });
     space.connect(glitchSend).connect(this.glitchIn);
     const pan = node(StereoPannerNode);
@@ -667,7 +825,7 @@ class RouteSynth {
     a.connect(shaper);
     b.connect(shaper);
     shaper.connect(bp).connect(amp).connect(pan).connect(this.noteBus);
-    pan.connect(node(GainNode, { gain: wetness(pos) })).connect(this.reverbIn);
+    pan.connect(node(GainNode, { gain: wetness(pos) })).connect(this.mix.arrival.wet);
     if (turnaround) pan.connect(this.glitchIn);
     [a, b].forEach(o => { o.start(at); o.stop(at + len); });
     this.activeNotes++;
@@ -677,7 +835,7 @@ class RouteSynth {
     };
   }
 
-  // Glitch bus: silent until a vehicle turns around at the end of its route (~2-5 a minute city-wide, one burst
+  // Glitch bus: silent until a vehicle turns around at the end of its route (~1-2.5 a minute city-wide, one burst
   // at a time). The route's drone is captured for 2 s and replayed as reversed, stuttering grains that thin out.
   glitchBurst(route, at) {
     if (!this.granular || at < this.glitchUntil) return;
@@ -730,7 +888,7 @@ class RouteSynth {
     const pan = node(StereoPannerNode, { pan: pos.pan });
     mod.connect(modGain).connect(car.frequency);
     (crush ? car.connect(node(WaveShaperNode, { curve: crushCurve(crush) })) : car).connect(amp).connect(pan).connect(this.noteBus);
-    pan.connect(node(GainNode, { gain: reverb })).connect(this.reverbIn);
+    pan.connect(node(GainNode, { gain: reverb })).connect(this.mix.arrival.wet);
     if (glitch > 0.01) pan.connect(node(GainNode, { gain: glitch })).connect(this.glitchIn);
     car.start(at);
     mod.start(at);
@@ -757,4 +915,5 @@ class RouteSynth {
 
 window.RouteSynth = RouteSynth;
 window.routePitch = routePitch;
+window.routeDegree = (route, mode) => ((routeStep(route, mode) % SCALE.length) + SCALE.length) % SCALE.length; // for colours
 window.routeFamily = route => family(metaFor(route)); // 'city' | 'hutt' | 'north' | 'rail' | 'special'

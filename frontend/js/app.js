@@ -1,5 +1,7 @@
-// Colour = sound: a bus takes the colour of its note (D pentatonic degrees), a train the colour of its line
-const NOTE_COLORS = { 0: '#5eead4', 2: '#7dd3fc', 4: '#a5b4fc', 7: '#86efac', 9: '#d8b4fe' }; // D E F# A B
+// Colour = sound: a bus takes the colour of its note (its degree in the current scale), a train the colour of its line
+const NOTE_COLORS = ['#5eead4', '#7dd3fc', '#a5b4fc', '#86efac', '#d8b4fe', '#67e8f9', '#93c5fd', '#c4b5fd', '#a7f3d0', '#bae6fd', '#f0abfc', '#ddd6fe']; // by scale degree
+// Close-up mode: 0 until the screen centre is 4 km from its nearest edge, fully in by 2.4 km
+const closeUpAt = edge => Math.max(0, Math.min(1, (4000 - edge) / 1600));
 const LINE_COLORS = { KPL: '#fbbf24', HVL: '#fb923c', MEL: '#fdba74', JVL: '#facc15', WRL: '#f87171' };
 const FERRY_COLOR = '#4f9dff';
 const OCCUPANCY = ['empty', 'many seats', 'few seats', 'standing room', 'packed', 'full']; // GTFS-RT occupancy_status
@@ -30,11 +32,10 @@ class BusSynthApp {
     this.arrivalTimes = []; // recent arrival times, for the city arrival rate
     this.listenerPos = null; // map view centre + radius: where you're listening from
 
-    // UI elements
     this.audioToggleBtn = document.getElementById('audio-toggle-btn');
     this.volumeSlider = document.getElementById('volume-slider');
     this.volumeValue = document.getElementById('volume-value');
-    this.modes = { pitch: 'length', drone: 'emergent' };
+    this.modes = { pitch: 'length', drone: 'emergent', scale: 'pentatonic' };
     this.connectionStatus = document.getElementById('connection-status');
     this.connectionDot = document.getElementById('connection-dot');
     this.audioStatus = document.getElementById('audio-status');
@@ -46,9 +47,7 @@ class BusSynthApp {
     this.arrivalsCount = document.getElementById('arrivals-count');
     this.delaysCount = document.getElementById('delays-count');
     this.reticle = document.getElementById('reticle');
-    this.listening = document.getElementById('listening');
 
-    // Audio events display elements
     this.activeRoutesDisplay = document.getElementById('active-routes');
     this.recentArrivalsDisplay = document.getElementById('recent-arrivals');
     this.delayEventsDisplay = document.getElementById('delay-events');
@@ -73,12 +72,25 @@ class BusSynthApp {
     });
 
     const checked = name => document.querySelector(`input[name="${name}"]:checked`).value;
-    document.querySelectorAll('input[name="pitch-mode"], input[name="drone-mode"]').forEach(input =>
-      input.addEventListener('change', () => {
-        this.modes = { pitch: checked('pitch-mode'), drone: checked('drone-mode') };
-        this.audio?.setModes(this.modes);
-        this.updateActiveRoutesDisplay();
-      }));
+    const scale = document.getElementById('scale-select');
+    const setModes = () => {
+      this.modes = { pitch: checked('pitch-mode'), drone: checked('drone-mode'), scale: scale.value };
+      this.audio?.setModes(this.modes);
+      this.updateActiveRoutesDisplay();
+    };
+    document.querySelectorAll('input[name="pitch-mode"], input[name="drone-mode"]').forEach(input => input.addEventListener('change', setModes));
+    scale.addEventListener('change', setModes);
+    // Mix sliders: 0-150%, squared so the travel feels even (150% = +7 dB)
+    document.querySelectorAll('input[data-level]').forEach(input =>
+      input.addEventListener('input', () => this.audio?.setLevel(input.dataset.level, (input.value / 100) ** 2)));
+
+    // Settings bar: opens above the transport
+    const settings = document.getElementById('settings');
+    const settingsBtn = document.getElementById('settings-btn');
+    settingsBtn.addEventListener('click', () => {
+      settings.hidden = !settings.hidden;
+      settingsBtn.setAttribute('aria-expanded', !settings.hidden);
+    });
 
     this.clearEventsBtn.addEventListener('click', () => this.clearAudioEvents());
     document.getElementById('follow-stop').addEventListener('click', () => this.mapManager?.unfollow());
@@ -113,7 +125,6 @@ class BusSynthApp {
 
   async initialize() {
     try {
-      // Fetch initial data
       const stopsResponse = await fetch('api/stops');
       if (!stopsResponse.ok) throw new Error('Failed to fetch stops');
 
@@ -122,7 +133,6 @@ class BusSynthApp {
       this.sortedStopLons = this.stops.map(s => s.stop_lon).sort((a, b) => a - b);
       this.calculateBounds();
 
-      // Initialize map
       this.mapManager = new InterpolatedMapManager('map-container', {
         colorFor: route => this.colorFor(route),
         describe: (id, route) => this.describe(id, route),
@@ -130,7 +140,6 @@ class BusSynthApp {
       });
       await this.mapManager.initialize(this.stops, this.bounds);
 
-      // Handle window resize for map
       window.addEventListener('resize', () => {
         if (this.mapManager) {
           this.mapManager.resize();
@@ -147,7 +156,6 @@ class BusSynthApp {
       this.audio.setModes(this.modes);
       this.updateReticle();
 
-      // Initialize WebSocket
       this.wsClient = new WebSocketClient();
       this.wsClient.onMessage = (data) => this.handleWebSocketMessage(data);
       this.wsClient.onStatusChange = (status) => this.updateConnectionStatus(status);
@@ -181,14 +189,16 @@ class BusSynthApp {
     return (lo / a.length) * 2 - 1;
   }
 
-  // The listener sits at the map view centre. Sound is at half strength at the crosshair ring, whose diameter is the
-  // screen's shorter side (full height on a desktop); radius (view half-diagonal) sets how zoomed out the view is.
+  // The listener sits at the map view centre and the screen is the area of focus: sound fades towards its edges
+  // (see Utils.spatial). radius (view half-diagonal) sets how zoomed out the view is; edge is the centre's distance
+  // to the nearest screen edge.
   listener() {
     const map = this.mapManager?.map;
-    if (!map) return { lat: -41.28, lon: 174.78, radius: 40000, hear: 16000 };
-    const c = map.getCenter(), ne = map.getBounds().getNorthEast(), size = map.getSize();
+    if (!map) return { lat: -41.28, lon: 174.78, radius: 40000, hw: 32000, hh: 24000, edge: 24000 };
+    const c = map.getCenter(), ne = map.getBounds().getNorthEast();
     const radius = Utils.calculateDistance(c.lat, c.lng, ne.lat, ne.lng);
-    return { lat: c.lat, lon: c.lng, radius, hear: radius * Math.min(size.x, size.y) / Math.hypot(size.x, size.y) };
+    const hw = Utils.calculateDistance(c.lat, c.lng, c.lat, ne.lng), hh = Utils.calculateDistance(c.lat, c.lng, ne.lat, c.lng);
+    return { lat: c.lat, lon: c.lng, radius, hw, hh, edge: Math.min(hw, hh) };
   }
 
   place(lat, lon) {
@@ -246,7 +256,7 @@ class BusSynthApp {
       const id = v?.vehicle?.id;
       if (!id) return;
       if (v.occupancy_status != null) this.vehicleOccupancy.set(id, v.occupancy_status);
-      // Turnaround: the feed assigns the vehicle its next trip at the terminus (~2-5 a minute city-wide).
+      // Turnaround: the feed assigns the vehicle its next trip at the terminus (~1-2.5 a minute city-wide).
       // Played after the map's display lag, where the vehicle is on screen.
       const trip = v.trip?.trip_id;
       const prev = this.vehicleTrip.get(id);
@@ -335,8 +345,13 @@ class BusSynthApp {
         // Speed over >=20 s: the map eases each 10 s report, so shorter windows pulse with the poll clock
         let pos = this.lastStatePositions.get(bus.id);
         if (!pos || now - pos.t >= 20000) {
-          const v = pos ? Utils.calculateDistance(pos.lat, pos.lon, p.latitude, p.longitude) / ((now - pos.t) / 1000) * 3.6 : null;
-          pos = { lat: p.latitude, lon: p.longitude, t: now, kmh: v > 130 ? null : v }; // >130: lagged position jumped (new trip / reappeared)
+          const d = pos ? Utils.calculateDistance(pos.lat, pos.lon, p.latitude, p.longitude) : 0;
+          const v = pos ? d / ((now - pos.t) / 1000) * 3.6 : null;
+          // Heading over the same window, compass degrees; kept from the last window while (nearly) stopped
+          const heading = pos && d > 40 && v <= 130
+            ? (Math.atan2((p.longitude - pos.lon) * Math.cos(p.latitude * Math.PI / 180), p.latitude - pos.lat) * 180 / Math.PI + 360) % 360
+            : pos?.heading ?? null;
+          pos = { lat: p.latitude, lon: p.longitude, t: now, kmh: v > 130 ? null : v, heading }; // >130: lagged position jumped (new trip / reappeared)
         }
         positions.set(bus.id, pos);
         if (pos.kmh != null) { kmh += pos.kmh; nk++; }
@@ -346,7 +361,7 @@ class BusSynthApp {
         lonSum += p.longitude;
         const place = this.place(p.latitude, p.longitude);
         if (!nearest || place.near > nearest.near) nearest = { lat: p.latitude, lon: p.longitude, near: place.near };
-        const vehicle = { id: bus.id, route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh };
+        const vehicle = { id: bus.id, route, lat: p.latitude, lon: p.longitude, kmh: pos.kmh, heading: pos.heading };
         if (type === 2) trains.push(vehicle);
         else if (type === 4) ferries.push(vehicle);
         else buses.push({ ...vehicle, place });
@@ -410,12 +425,24 @@ class BusSynthApp {
     if (weight) traffic.pan /= weight;
 
     this.detectDocking(ferries);
+
+    // Close-up mode: zoomed in under ~4 km (see closeUpAt), each bus on screen gets its own voice. All of them,
+    // nearest the centre first (in screen units); the engine plays as many as its voice budget allows and drops the
+    // furthest.
+    const closeUp = closeUpAt(this.listenerPos.edge);
+    const nearby = closeUp === 0 ? [] : buses
+      .map(b => ({ ...b, view: Utils.viewOffset(b.lat, b.lon, this.listenerPos) }))
+      .filter(({ view: v }) => Math.abs(v.dx) < 1.05 * v.hw && Math.abs(v.dy) < 1.05 * v.hh)
+      .sort((a, b) => a.view.e - b.view.e)
+      .map(b => ({ id: b.id, route: b.route, lat: b.lat, lon: b.lon, kmh: b.kmh, heading: b.heading, delay: this.vehicleDelay.get(b.id) ?? 0 }));
     this.arrivalTimes = this.arrivalTimes.filter(t => now - t < 60000);
     this.lastStatePositions = positions;
     this.routeStates = states;
     if (!this.isAudioStarted) return;
     this.audio.update({
       zoom: overview,
+      closeUp,
+      nearby,
       routes: states,
       trains,
       ferries,
@@ -478,18 +505,13 @@ class BusSynthApp {
     const type = Utils.routeType(route);
     if (type === 2) return LINE_COLORS[route] || '#fbbf24';
     if (type === 4) return FERRY_COLOR;
-    const semis = Math.round(12 * Math.log2(routePitch(route, this.modes.pitch) / 73.42));
-    return NOTE_COLORS[((semis % 12) + 12) % 12] || '#5eead4';
+    return NOTE_COLORS[routeDegree(route, this.modes.pitch) % NOTE_COLORS.length]; // colour = scale degree
   }
 
-  // Crosshair ring: where sound is at half strength. Fades out when zoomed right out (then everything is heard).
+  // Crosshair at the screen centre, where you listen from; "every bus" fades in with close-up mode
   updateReticle() {
     if (!this.mapManager?.map) return;
-    const l = this.listener();
-    const size = this.mapManager.map.getSize();
-    this.reticle.style.setProperty('--ring', `${Math.min(size.x, size.y)}px`);
-    this.reticle.style.setProperty('--ring-opacity', (1 - Utils.overviewWeight(l.radius)).toFixed(2));
-    this.listening.textContent = `${(l.hear / 1000).toFixed(1)} km`;
+    this.reticle.style.setProperty('--closeup', closeUpAt(this.listener().edge).toFixed(2));
   }
 
   updateCounts() {
@@ -586,18 +608,15 @@ class BusSynthApp {
     this.vehicleDelay.clear();
     this.vehicleOccupancy.clear();
 
-    // Clear audio events display
-    this.clearAudioEvents();
+      this.clearAudioEvents();
   }
 }
 
-// Initialize the application when the page loads
 document.addEventListener('DOMContentLoaded', () => {
   window.app = new BusSynthApp();
   window.app.initialize();
 });
 
-// Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   if (window.app) {
     window.app.dispose();

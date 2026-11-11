@@ -1,6 +1,6 @@
 // Canvas layer for vehicle trails. Each trail is a Catmull-Rom spline through the vehicle's recent GPS points, built
 // once per new point (every ~10 s) and projected once per zoom level; a frame only offsets, culls and strokes it,
-// fading from tail to head. Trails restart after a GPS jump (see InterpolatedMapManager.markJump).
+// fading from tail to head. Trails restart after a GPS jump (see InterpolatedMapManager.addPosition).
 class CanvasTrailsLayer extends L.Layer {
   constructor(options = {}) {
     super();

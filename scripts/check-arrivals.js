@@ -36,7 +36,7 @@ same(a.map(x => [x.trip, x.route]), [['a', '2'], ['b', 'KPL']]);
 // Pitch by length: longer route = lower note
 const byLen = r => routePitch(r, 'length');
 assert.ok(byLen('WRL') < byLen('KPL') && byLen('KPL') < byLen('2') && byLen('2') < byLen('22'));
-// Every pitch in either mode sits on the D pentatonic scale
+// Every pitch in either mode sits on the default D pentatonic scale
 const D = [0, 2, 4, 7, 9];
 for (const r of ['1', '2', '110', '220', 'KPL', 'AX', 'CCL', 'WHF', 'N1', '737', 'unknown']) {
   for (const mode of ['length', 'family']) {
@@ -60,8 +60,10 @@ let sp = Utils.spatial(-41.29, 174.78, L, 0.5);
 assert.ok(Math.abs(sp.pan) < 1e-9 && sp.near > 0.99 && sp.local > 0.99);
 assert.ok(Utils.spatial(-41.29, 174.80, L, 0).pan > 0.5);
 assert.ok(Utils.spatial(-41.0, 175.2, L, 0).near < 0.05);
-// The hearing radius (crosshair ring) sets where sound is at half strength
-assert.ok(Math.abs(Utils.spatial(-41.29 + 2000 / 110540, 174.78, { ...L, hear: 2000 }, 0).near - 0.5) < 1e-9);
+// The falloff has the screen's shape: half strength 70% of the way to each edge, whatever the aspect ratio
+const wide = { ...L, hw: 3000, hh: 2000 };
+assert.ok(Math.abs(Utils.spatial(-41.29 + 1400 / 110540, 174.78, wide, 0).near - 0.5) < 1e-9);
+assert.ok(Math.abs(Utils.spatial(-41.29, 174.78 + 2100 / (111320 * Math.cos(-41.29 * Math.PI / 180)), wide, 0).near - 0.5) < 1e-9);
 sp = Utils.spatial(-41.0, 175.2, { ...L, radius: 40000 }, -0.3);
 assert.ok(Math.abs(sp.pan + 0.3) < 1e-9 && Math.abs(sp.near - 1) < 1e-9 && sp.local === 0);
 console.log('ok');

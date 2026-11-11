@@ -90,7 +90,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .vehicle-marker.following svg { filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 8px rgba(255, 255, 255, 0.7)); }
 .leaflet-canvas-stops-layer { pointer-events: none; }
 
-/* Listening crosshair at the map centre; the ring marks half strength and fades out when zoomed right out */
+/* Listening crosshair at the map centre */
 .reticle {
     position: fixed; left: 50%; top: 50%; width: 0; height: 0;
     pointer-events: none; z-index: 450;
@@ -99,16 +99,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
     position: absolute; left: -5px; top: -5px; width: 10px; height: 10px;
     border: 1.5px solid rgba(255, 255, 255, 0.55); border-radius: 50%;
 }
-.reticle-ring {
-    position: absolute; left: calc(var(--ring, 0px) / -2); top: calc(var(--ring, 0px) / -2);
-    width: var(--ring, 0px); height: var(--ring, 0px);
-    border: 1px dashed rgba(255, 255, 255, 0.22); border-radius: 50%;
-    opacity: var(--ring-opacity, 0); transition: opacity 0.4s;
-}
 .reticle-label {
     position: absolute; left: 10px; top: 8px; white-space: nowrap;
     font-size: 10.5px; color: rgba(255, 255, 255, 0.5);
-    opacity: var(--ring-opacity, 0); transition: opacity 0.4s;
+    opacity: var(--closeup, 0); transition: opacity 0.4s;
 }
 
 /* ---------- Floating chrome ---------- */
@@ -172,6 +166,33 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 .volume { display: flex; align-items: center; gap: 6px; color: var(--dim); }
 .volume input[type="range"] { width: 96px; accent-color: var(--accent); }
+
+.settings-btn {
+    width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--dim);
+    transition: color 0.15s, background 0.15s;
+}
+.settings-btn:hover, .settings-btn[aria-expanded="true"] { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+
+/* Sound settings: a bar that opens above the transport */
+.settings {
+    position: fixed; left: 50%; bottom: 78px; transform: translateX(-50%);
+    display: flex; align-items: flex-end; gap: 16px; padding: 10px 14px 12px; border-radius: 16px;
+}
+.settings[hidden] { display: none; }
+.setting { border: 0; display: flex; flex-direction: column; gap: 5px; }
+.setting legend, .setting .legend {
+    padding: 0 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
+}
+.setting select {
+    font: inherit; font-size: 12px; color: var(--text); background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 28px 5px 12px; appearance: none; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23949eb0' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center; background-size: 10px 6px;
+}
+.setting select option { background: #0b0f16; color: var(--text); }
+.mix-grid { display: grid; grid-template-columns: repeat(2, auto); gap: 4px 14px; padding: 0 4px; }
+.mix-grid label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--dim); }
+.mix-grid input[type="range"] { width: 80px; accent-color: var(--accent); }
 
 .segmented {
     display: inline-flex; border: 0; padding: 3px; border-radius: 999px;
@@ -324,6 +345,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
         justify-content: space-between; gap: 8px; padding-right: 8px;
     }
     .volume input[type="range"] { width: 60px; }
+    .settings { left: 10px; right: 10px; bottom: 70px; transform: none; flex-wrap: wrap; justify-content: center; }
     .intro { padding: 20px 18px 0; }
     .follow-pill { top: 50px; }
     .intro .lede { font-size: 16px; }

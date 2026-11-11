@@ -9,28 +9,25 @@ class InterpolatedMapManager {
     this.following = null; // vehicle id the camera is following
     this.map = null;
     this.busMarkers = new Map();
-    this.canvasStopsLayer = null; // Canvas-based stop rendering
-    this.canvasTrailsLayer = null; // Canvas-based trail rendering (replaces polyline trails)
+    this.canvasStopsLayer = null;
+    this.canvasTrailsLayer = null;
     this.bounds = null;
 
-    // Interpolation and animation
     this.suspects = new Map(); // busId -> a report that jumped, waiting for the next one to confirm or refute it
-    this.busPositionHistory = new Map(); // busId -> array of {position, timestamp}
+    this.busPositionHistory = new Map(); // busId -> reports { lat, lon, bearing, routeId, timestamp, reported, jump }
     this.currentInterpolatedPositions = new Map(); // busId -> current lagged position
     this.currentTime = Date.now();
     this.displayLag = MAP_CONSTANTS.TIMING.DISPLAY_LAG_MS;
     this.maxHistoryAge = MAP_CONSTANTS.TIMING.MAX_HISTORY_AGE_MS;
-    this.hasInitialData = false; // Track if we've received first dataset
+    this.hasInitialData = false;
     this.animationFrame = null;
     this.isAnimating = false;
-    this.historicalDataCount = 0; // Count historical entries received
-    this.lastAnimationTime = Date.now(); // Track animation timing for gap detection
-    this.wasDocumentHidden = false; // Track document visibility state
+    this.historicalDataCount = 0;
+    this.lastAnimationTime = Date.now();
+    this.wasDocumentHidden = false;
 
-    // Performance optimization
     this.viewportBounds = null;
 
-    // Trail settings
     this.trailLength = MAP_CONSTANTS.TRAIL.LENGTH_SEGMENTS;
 
     // A lot of this shit should probably not be hardcoded
@@ -73,11 +70,9 @@ class InterpolatedMapManager {
     this.stops = stops;
     this.bounds = bounds;
 
-    // Calculate center for Wellington
     const centerLat = (bounds[0][0] + bounds[0][1]) / 2;
     const centerLon = (bounds[1][0] + bounds[1][1]) / 2;
 
-    // Initialize Leaflet map
     this.map = L.map(this.containerId, {
       center: [centerLat, centerLon],
       zoom: 11,
@@ -106,15 +101,12 @@ class InterpolatedMapManager {
     const gl = basemap.getMaplibreMap();
     gl.on('styleimagemissing', e => { if (!gl.hasImage(e.id)) gl.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) }); });
 
-    // Add canvas-based stop layer
     this.canvasStopsLayer = new CanvasStopsLayer(stops);
     this.map.addLayer(this.canvasStopsLayer);
     
-    // Add canvas-based trails layer
     this.canvasTrailsLayer = new CanvasTrailsLayer();
     this.map.addLayer(this.canvasTrailsLayer);
 
-    // Set up viewport tracking
     this.updateViewportBounds();
     this.map.on('moveend', () => {
       this.updateViewportBounds();
@@ -124,13 +116,11 @@ class InterpolatedMapManager {
     this.map.on('zoomend', () => {
       this.updateViewportBounds();
       this.renderVisibleFeatures();
-      // Force canvas redraw on zoom
       if (this.canvasStopsLayer) {
         this.canvasStopsLayer.forceRedraw();
       }
     });
 
-    // Start animation loop
     this.startAnimation();
 
     // Add page visibility listeners to handle focus/unfocus issues
@@ -146,7 +136,7 @@ class InterpolatedMapManager {
       } else if (this.wasDocumentHidden) {
         this.clearAllTrailsAndConnections();
         this.wasDocumentHidden = false;
-        this.lastAnimationTime = Date.now(); // Reset timing
+        this.lastAnimationTime = Date.now();
       }
     };
 
@@ -154,7 +144,6 @@ class InterpolatedMapManager {
   }
 
   clearAllTrailsAndConnections() {
-    // Clear all canvas-based trails
     if (this.canvasTrailsLayer) {
       this.canvasTrailsLayer.clearAllTrails();
     }
@@ -262,7 +251,6 @@ class InterpolatedMapManager {
         return;
       }
 
-      // Find the two positions to interpolate between
       let beforePos = null;
       let afterPos = null;
 
@@ -285,12 +273,11 @@ class InterpolatedMapManager {
         return;
       }
 
-      // Smooth interpolation between positions
       const totalTime = afterPos.timestamp - beforePos.timestamp;
       const elapsedTime = displayTime - beforePos.timestamp;
       const progress = totalTime > 0 ? Math.max(0, Math.min(1, elapsedTime / totalTime)) : 0;
 
-      // Use smooth step function for even smoother interpolation
+      // Smoothstep easing between the two reports
       const smoothProgress = afterPos.jump ? 0 : progress * progress * (3 - 2 * progress); // after a jump: step, don't fly
 
       const interpolatedPos = {
@@ -301,7 +288,6 @@ class InterpolatedMapManager {
         timestamp: displayTime
       };
 
-      // Store interpolated position for other systems to use
       this.currentInterpolatedPositions.set(busId, interpolatedPos);
 
       this.updateBusMarker(busId, interpolatedPos);
@@ -310,7 +296,6 @@ class InterpolatedMapManager {
   }
   updateBusMarker(busId, position) {
     if (!this.isInViewport(position.lat, position.lon)) {
-      // Hide marker if outside viewport
       if (this.busMarkers.has(busId)) {
         const markerData = this.busMarkers.get(busId);
         if (markerData.isVisible) {
@@ -324,9 +309,9 @@ class InterpolatedMapManager {
     const color = this.getRouteColor(position.routeId);
 
     if (this.busMarkers.has(busId)) {
-      // Update existing marker - position at EXACT GPS coordinates
+      // Update existing marker at its interpolated (lagged) position
       const markerData = this.busMarkers.get(busId);
-      markerData.marker.setLatLng([position.lat, position.lon]); // Exact GPS position
+      markerData.marker.setLatLng([position.lat, position.lon]);
 
       // Rebuilding the icon replaces its DOM node, so only do it when what it shows has changed
       const zoom = this.map.getZoom();
@@ -339,13 +324,11 @@ class InterpolatedMapManager {
         if (busId === this.following) markerData.marker.getElement()?.classList.add('following'); // new icon, new element
       }
 
-      // Add to map if not visible
       if (!markerData.isVisible) {
         markerData.marker.addTo(this.map);
         markerData.isVisible = true;
       }
     } else {
-      // Create new marker
       const type = Utils.routeType(position.routeId);
       const marker = L.marker([position.lat, position.lon], { icon: this.vehicleIcon(color, position.bearing, type, this.map.getZoom()) });
 
@@ -361,7 +344,6 @@ class InterpolatedMapManager {
       marker.bindTooltip(tooltip);
       marker.on('click', () => this.follow(busId));
 
-      // Add hover events for auto-hide tooltip
       marker.on('mouseover', () => {
         if (tooltipTimeout) {
           clearTimeout(tooltipTimeout);
@@ -374,7 +356,7 @@ class InterpolatedMapManager {
       marker.on('mouseout', () => {
         tooltipTimeout = setTimeout(() => {
           marker.closeTooltip();
-        }, 1000); // 1 second delay
+        }, 1000);
       });
 
       marker.addTo(this.map);
@@ -496,12 +478,10 @@ class InterpolatedMapManager {
   }
 
   renderVisibleFeatures() {
-    // Just force a redraw to update visible stops
     if (this.canvasStopsLayer) {
       this.canvasStopsLayer.forceRedraw();
     }
     
-    // Force trails redraw when viewport changes
     if (this.canvasTrailsLayer) {
       this.canvasTrailsLayer.forceRedraw();
     }
@@ -522,7 +502,6 @@ class InterpolatedMapManager {
   }
   removeBus(busId) {
     if (this.following === busId) this.unfollow();
-    // Remove marker
     if (this.busMarkers.has(busId)) {
       const markerData = this.busMarkers.get(busId);
       if (markerData.isVisible) {
@@ -531,16 +510,13 @@ class InterpolatedMapManager {
       this.busMarkers.delete(busId);
     }
 
-    // Remove trail from canvas layer
     if (this.canvasTrailsLayer) {
       this.canvasTrailsLayer.removeBusTrail(busId);
     }
 
-    // Remove position history
     this.busPositionHistory.delete(busId);
     this.suspects.delete(busId);
 
-    // Remove current interpolated position
     this.currentInterpolatedPositions.delete(busId);
   }
 
@@ -559,7 +535,6 @@ class InterpolatedMapManager {
     return this.colorFor(routeId);
   }
 
-  // Linear interpolation
   lerp(a, b, t) {
     return a + (b - a) * t;
   }
@@ -616,7 +591,6 @@ class InterpolatedMapManager {
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
-    // Haversine formula for accurate geodetic distance
     const R = 6371000; // Earth's radius in meters
     const φ1 = lat1 * Math.PI / 180;
     const φ2 = lat2 * Math.PI / 180;
@@ -628,13 +602,12 @@ class InterpolatedMapManager {
       Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-    return R * c; // Distance in meters
+    return R * c;
   }
 
   dispose() {
     this.stopAnimation();
 
-    // Remove visibility event listeners
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
 
     if (this.map) {

@@ -27,11 +27,10 @@
 <body>
     <div id="map-container" aria-label="Live map of Wellington buses and trains"></div>
 
-    <!-- You listen from the map centre; the ring is where sound drops to half -->
+    <!-- You listen from the map centre; sound fades towards the screen edges -->
     <div class="reticle" id="reticle" aria-hidden="true">
-        <div class="reticle-ring"></div>
         <div class="reticle-dot"></div>
-        <span class="reticle-label mono" id="listening"></span>
+        <span class="reticle-label mono">every bus</span>
     </div>
 
     <h1 class="brand">Metlink Synth</h1>
@@ -86,13 +85,13 @@
 
     <dialog class="intro" id="intro" aria-labelledby="intro-title">
         <h2 id="intro-title">Metlink Synth</h2>
-        <p class="lede">Wellington's buses and trains, as a generative ambient synth.</p>
+        <p class="lede">Wellington's buses, trains and ferries, as a generative ambient synth.</p>
 
         <section>
             <i class="swatch swatch-bus" aria-hidden="true"></i>
             <div>
                 <h3>Buses hum</h3>
-                <p>Every busy route is a drone: two detuned <span class="tech">saws</span> through a <span class="tech">lowpass</span>, on its own note of a <span class="tech">just-intoned D pentatonic</span> (longer route, lower note). Each stop arrival plucks a little <span class="tech">2-op FM</span> note at the moment it happened. The site runs 60 seconds behind live. This is so we can buffer and smooth events and also because metlink is never on time.</p>
+                <p>Every busy route is a drone: two detuned <span class="tech">saws</span> through a <span class="tech">lowpass</span>, on its own note of a <span class="tech">just-intoned D pentatonic</span> (longer route, lower note; other scales live in the settings). Each stop arrival plucks a little <span class="tech">2-op FM</span> note at the moment it happened. The site runs 60 seconds behind live. This is so we can buffer and smooth events and also because metlink is never on time.</p>
             </div>
         </section>
         <section>
@@ -127,7 +126,7 @@
             <i class="swatch swatch-arrival" aria-hidden="true"></i>
             <div>
                 <h3>You are the crosshair</h3>
-                <p>The ring is the half-point of the <span class="tech">distance rolloff</span>. Zoom in and the street gets close, dry and a bit grubby with a touch of <span class="tech">drive</span>. Zoom out and the whole region melts into <span class="tech">reverb</span>.</p>
+                <p>You listen from the middle of the screen, and the <span class="tech">distance rolloff</span> fades sound out towards its edges: what you're looking at is what you hear. Zoom in and the street gets close, dry and a bit grubby with a touch of <span class="tech">drive</span>. Get within about 4 km and every bus on screen gets its own voice: heading east bends it sharp, west bends it flat, and its speed opens the filter. Zoom out and the whole region melts into <span class="tech">reverb</span>.</p>
             </div>
         </section>
 
@@ -140,6 +139,45 @@
         <p class="intro-foot">Live from Metlink Open Data, positions every ~10 s. Headphones recommended.</p>
     </dialog>
 
+    <div class="settings glass" id="settings" hidden>
+        <fieldset class="setting">
+            <legend>Pitch</legend>
+            <div class="segmented" title="Longer route = lower note, or one chord tone per area">
+                <input type="radio" name="pitch-mode" id="pitch-length" value="length" checked><label for="pitch-length">Length</label>
+                <input type="radio" name="pitch-mode" id="pitch-family" value="family"><label for="pitch-family">Area</label>
+            </div>
+        </fieldset>
+        <fieldset class="setting">
+            <legend>Drone</legend>
+            <div class="segmented" title="Every busy route, or only the 8 busiest">
+                <input type="radio" name="drone-mode" id="drone-emergent" value="emergent" checked><label for="drone-emergent">All</label>
+                <input type="radio" name="drone-mode" id="drone-top8" value="top8"><label for="drone-top8">Top 8</label>
+            </div>
+        </fieldset>
+        <label class="setting">
+            <span class="legend">Scale</span>
+            <select id="scale-select">
+                <option value="pentatonic" selected>Pentatonic</option>
+                <option value="minor">Minor pentatonic</option>
+                <option value="dorian">Dorian</option>
+                <option value="lydian">Lydian</option>
+                <option value="hirajoshi">Hirajoshi</option>
+                <option value="harmonic">Harmonic series</option>
+                <option value="wholetone">Whole tone</option>
+                <option value="chromatic">Chromatic</option>
+            </select>
+        </label>
+        <fieldset class="setting">
+            <legend>Mix</legend>
+            <div class="mix-grid">
+                <label>Buses <input type="range" data-level="bus" min="0" max="150" value="100"></label>
+                <label>Trains <input type="range" data-level="train" min="0" max="150" value="100"></label>
+                <label>Ferries <input type="range" data-level="ferry" min="0" max="150" value="100"></label>
+                <label>Arrivals <input type="range" data-level="arrival" min="0" max="150" value="100"></label>
+            </div>
+        </fieldset>
+    </div>
+
     <div class="transport glass" role="toolbar" aria-label="Sound controls">
         <button id="audio-toggle-btn" class="play" aria-pressed="false">
             <svg class="icon icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
@@ -151,16 +189,10 @@
             <input type="range" id="volume-slider" min="0" max="100" value="70" aria-label="Volume">
             <span id="volume-value" class="sr-only">70%</span>
         </label>
-        <fieldset class="segmented" title="Pitch: longer route = lower, or one chord tone per area">
-            <legend class="sr-only">Pitch</legend>
-            <input type="radio" name="pitch-mode" id="pitch-length" value="length" checked><label for="pitch-length">Length</label>
-            <input type="radio" name="pitch-mode" id="pitch-family" value="family"><label for="pitch-family">Area</label>
-        </fieldset>
-        <fieldset class="segmented" title="Drone: every busy route, or only the 8 busiest">
-            <legend class="sr-only">Drone</legend>
-            <input type="radio" name="drone-mode" id="drone-emergent" value="emergent" checked><label for="drone-emergent">All</label>
-            <input type="radio" name="drone-mode" id="drone-top8" value="top8"><label for="drone-top8">Top 8</label>
-        </fieldset>
+        <button id="settings-btn" class="settings-btn" aria-expanded="false" aria-controls="settings" title="Sound settings">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><circle cx="16" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+            <span class="sr-only">Sound settings</span>
+        </button>
     </div>
 
     <script src="js/websocket.js"></script>

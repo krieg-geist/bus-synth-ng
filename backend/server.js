@@ -13,7 +13,6 @@ const app = express();
 const PORT = process.env.PORT || SHARED_CONSTANTS.NETWORK.DEFAULT_HTTP_PORT;
 const WS_PORT = process.env.WS_PORT || SHARED_CONSTANTS.NETWORK.DEFAULT_WS_PORT;
 
-// Initialize cache, historical cache, and Metlink client
 const cache = new Cache();
 const historicalCache = new HistoricalDataCache({
   maxAge: SHARED_CONSTANTS.CACHE.HISTORICAL_MAX_AGE_MS,
@@ -27,7 +26,6 @@ if (!process.env.METLINK_API_KEY) {
   process.exit(1);
 }
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -74,7 +72,6 @@ console.log(`Frontend path: ${frontendPath}`);
 console.log(`HTTP port: ${PORT}`);
 console.log(`WebSocket port: ${WS_PORT}`);
 
-// Verify frontend directory exists
 if (!fs.existsSync(frontendPath)) {
   console.error(`Frontend directory does not exist: ${frontendPath}`);
   if (isDevelopment) {
@@ -99,7 +96,6 @@ app.use(express.static(frontendPath, {
   }
 }));
 
-// Serve frontend
 app.get('/', (req, res) => {
   const indexPath = isDevelopment
     ? path.join(__dirname, '../frontend/index.html')  // Development
@@ -107,7 +103,6 @@ app.get('/', (req, res) => {
   res.sendFile(indexPath);
 });
 
-// Start HTTP server
 app.listen(PORT, () => {
   console.log(`HTTP server running on port ${PORT}`);
 });
@@ -151,7 +146,6 @@ const broadcastUpdates = async () => {
   }
 };
 
-// Handle WebSocket connections
 wss.on('connection', (ws) => {
   console.log('Client connected');
 
@@ -202,7 +196,6 @@ const initializeHistoricalCache = async () => {
   }
 };
 
-// Start initialization
 initializeHistoricalCache();
 
 // Graceful shutdown (SIGINT from Ctrl-C, SIGTERM from docker stop)
